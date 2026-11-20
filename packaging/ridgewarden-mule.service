@@ -1,0 +1,23 @@
+[Unit]
+Description=ridgewarden-mule, data mules between AREDN mesh islands
+Documentation=https://github.com/Londopy/ridgewarden-mule
+After=network-online.target ridgewarden.service
+Wants=network-online.target
+
+[Service]
+# its own user, in the core's group: it can read the core's local.token, not its station key
+User=ridgewarden-mule
+Group=ridgewarden-mule
+SupplementaryGroups=ridgewarden
+ExecStart=/usr/bin/ridgewarden-mule --config /etc/ridgewarden/mule.toml run
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# files to send are copied into the core's import folder
+ReadWritePaths=/var/lib/ridgewarden-mule /var/lib/ridgewarden/imports
+
+[Install]
+WantedBy=multi-user.target
