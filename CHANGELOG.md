@@ -1,12 +1,10 @@
 # Changelog
 
-All notable changes to ridgewarden-mule are listed here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html). The section for a version is
-what appears on its GitHub release page. Validated in CI by
-[patchnotes](https://github.com/Londopy/patchnotes).
+All notable changes to ridgewarden-mule are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The section for a version is what appears on its GitHub release page. Validated in CI by [patchnotes](https://github.com/Londopy/patchnotes).
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-11-20
 
 ### Added
 
@@ -24,4 +22,5 @@ what appears on its GitHub release page. Validated in CI by
 - The forms check origin and rate before reading a body, hold at most two uploads in memory, and then need the send key.
 - A build guide for a car kit and parking-lot syncs (docs/car-kit.md).
 
-[Unreleased]: https://github.com/Londopy/ridgewarden-mule/commits/main
+[Unreleased]: https://github.com/Londopy/ridgewarden-mule/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Londopy/ridgewarden-mule/releases/tag/v0.1.0
