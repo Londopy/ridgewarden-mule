@@ -15,9 +15,10 @@ It needs a [ridgewarden](https://github.com/Londopy/ridgewarden) core on the sam
 
 ## What it does
 
-- **Messages to another island**, from a form or the `send` command: destination island, optional addressee callsign, priority class, text, and optionally a file. A sending site can withdraw a message until it is delivered, and the message page has a reply link.
+- **Messages to another island**, from a form or the `send` command, the form taking files as big as the site allows (`upload_max_mb`, 4 GB by default) and writing them to disk as they arrive: destination island, optional addressee callsign, priority class, text, and optionally a file. A sending site can withdraw a message until it is delivered, and the message page has a reply link.
 - **Priority classes.** Urgent (files up to 1 MB), routine (up to 50 MB) and bulk (big files, up to 1 TB). Message text travels in the core's event log, which is small and syncs first. Files go into the core's blob store at priority 0, 4 and 8, so a short sync in a parking lot moves urgent traffic before bulk, and an interrupted transfer resumes where it stopped.
-- **Couriers' trips and a plan.** A courier registers a regular drive: from which island to which, on which days, leaving when (UTC), how long it takes and how much room there is for files. Every site works out the same plan from the same events: each waiting message goes with the first registered departure on its corridor that has room, urgent first, then oldest first. Cars load only their own share instead of every file for every island. Cargo with no courier, or no room in the next two weeks, says so.
+- **Couriers' trips and a plan.** A courier registers a regular drive: from which island to which, on which days, leaving when (UTC), how long it takes and how much room there is for files. Every site works out the same plan from the same events: each waiting message goes with the first registered departure on its corridor that has room, urgent first, then oldest first. Cars load only their own share instead of every file for every island. Cargo with no courier, or no room in the next two weeks, says so. A planned message, and one picked up for a registered trip, shows when it should reach its island (the end of that trip's drive), and one past that time shows as overdue; a load on an unscheduled drive has no expected time.
+- **Couriers seen.** The Trips page lists each courier with the trips they registered, how many of those trips' departures fell due in the last 30 days (since each was registered), on how many of those days a pinned car logged a pickup naming them as control operator, and when they last picked up and dropped off, so the people running the mesh can see which trips really happen.
 - **Tonight's manifest.** In the car, the manifest page shows which drive it is on (its operator's next registered trip, one picked by hand, or an unscheduled drive), what goes on it ranked by priority and age, how long each item has waited, and whether everything is aboard yet. The car's core fetches exactly those files, never more than the trip's room or the car's own, counting what is already aboard, and lets each go once the destination's receipt is back.
 - **An audit trail.** The car records each pickup (the message and its file are aboard) and each drop-off (a pinned core on the destination island holds them) as signed events naming the control operator and the trip. Only pickups and drop-offs from the cars' pinned keys count.
 - **Receipts by any path.** The destination island saves each file, checks it against the blob id the message names, and signs a receipt. The receipt is an ordinary signed event, so it gets back to the sender with the next car, over a tunnel once the internet is back, or over a BPv7 link. Only receipts from the destination island's pinned keys count. Failed deliveries are retried with a growing wait, and the page says why.
@@ -29,7 +30,7 @@ It needs a [ridgewarden](https://github.com/Londopy/ridgewarden) core on the sam
 
 There are no accounts. A message is signed by the sending site's core, under the callsign of that core's licensee, and names the operator who wrote it (a callsign, required). The site's forms ask for a send key that the station's owner hands to the operators allowed to use them. The car's records are signed by the car's core and name its control operator. Everything is signed and nothing is encrypted: anyone on either mesh can read every message.
 
-The send key travels in clear HTTP like everything else on the mesh. It keeps visitors and spectators out of the forms; it is not a secret from someone listening on the RF link. Posts are limited to one per address every few seconds and two in memory at once, and nothing in a post is read before those checks pass.
+The send key travels in clear HTTP like everything else on the mesh. It keeps visitors and spectators out of the forms; it is not a secret from someone listening on the RF link. An address gets one post every few seconds and at most two open at once, and nothing else is held for a post until its key checks out, so idle or unauthenticated posts can't lock anyone else out. A file in the send form is written to disk as it arrives, and only once the key and the message above it on the page (priority, destination, sender) have checked out; then it takes one of two upload slots, and a third upload is turned away before any of it is written, while text-only messages and the other forms (eight at a time) still go through. A file declared bigger than the priority allows is refused at once, and one that grows past it is cut off and deleted. Until the key has checked out a post gets 30 seconds; after that it may take as long as it keeps moving. An upload that is abandoned halfway is deleted at once, and any left by a crash or a restart (`systemctl stop` sends SIGTERM, which stops the service within about ten seconds) are deleted when the service starts.
 
 ## Install
 
@@ -59,24 +60,24 @@ The page is on `http://<pi>:8800/`. Add it to the core's dashboard with an `[[ap
 The forms take the send key in `/var/lib/ridgewarden-mule/send.key`, made on first run. The command line works as the service's user, since it needs the core's token and import folder:
 
 ```sh
-sudo -u ridgewarden ridgewarden-mule send --to south --call N0BBB --class urgent \
+sudo -u ridgewarden-mule ridgewarden-mule send --to south --call N0BBB --class urgent \
     "Shelter at the high school needs 20 cots and water by tomorrow."
-sudo -u ridgewarden ridgewarden-mule send --to south --class bulk --file tiles.zip "Updated map tiles"
-sudo -u ridgewarden ridgewarden-mule withdraw <message id>
+sudo -u ridgewarden-mule ridgewarden-mule send --to south --class bulk --file tiles.zip "Updated map tiles"
+sudo -u ridgewarden-mule ridgewarden-mule withdraw <message id>
 
 # a courier who leaves north at 17:30 Pacific on Fridays, which is Saturday 01:30 UTC,
 # and drives back on Sundays at 14:00 Pacific (22:00 UTC)
-sudo -u ridgewarden ridgewarden-mule trip friday-south --courier N0DRV --from north --to south \
+sudo -u ridgewarden-mule ridgewarden-mule trip friday-south --courier N0DRV --from north --to south \
     --days sat --depart 01:30 --hours 4 --capacity-mb 20000 --note "parks by the fire station node"
-sudo -u ridgewarden ridgewarden-mule trip sunday-north --courier N0DRV --from south --to north \
+sudo -u ridgewarden-mule ridgewarden-mule trip sunday-north --courier N0DRV --from south --to north \
     --days sun --depart 22:00 --hours 4 --capacity-mb 20000
-sudo -u ridgewarden ridgewarden-mule retire sunday-north
+sudo -u ridgewarden-mule ridgewarden-mule retire sunday-north
 
 # on an island: what goes with whom; in the car: tonight's manifest
-sudo -u ridgewarden ridgewarden-mule manifest
+sudo -u ridgewarden-mule ridgewarden-mule manifest
 ```
 
-Trips can also be registered and retired on the Trips page; registering one again with the same name changes it. Days are `fri`, `mon,thu`, `mon-fri` or `daily`. Days and times are UTC, like every other time in the suite, so an evening departure in the Americas is often the next day in UTC. A delivered file is saved in the core's export folder (`/var/lib/ridgewarden/exports`), and the message's page links to it if it is 64 MB or smaller.
+Trips can also be registered and retired on the Trips page; registering one again with the same name changes it. Days are `fri`, `mon,thu`, `mon-fri` or `daily`. Days and times are UTC, like every other time in the suite, so an evening departure in the Americas is often the next day in UTC. A delivered file is saved in the core's export folder (`/var/lib/ridgewarden/exports`), and the message's page has a download link. Downloads stream from disk whatever the file's size and resume with HTTP ranges; they carry the blob id as ETag and honour If-Range, so a resume never splices two versions. Resuming is tested with `curl -C -`, not yet with browsers. Four run at once and a fifth gets a "try again shortly"; a client that takes nothing for two minutes gives its slot back (its download goes on if it starts reading again).
 
 In the car, open the Manifest page before you leave. It picks the operator's next registered trip that leaves within 18 hours (or is on the road); pick a different one, or "not a registered trip", from the list on the page. An unscheduled drive takes whatever has no courier in the next day, up to `[car] capacity_mb`.
 
@@ -88,6 +89,7 @@ In the car, open the Manifest page before you leave. It picks the operator's nex
 island = "north"          # same name at every site on this island
 operator = "N0AAA"        # default sender callsign
 third_party = false       # Part 97.115; see below
+upload_max_mb = 4000      # biggest file the send form takes; the send command has no such cap
 
 [core]
 url = "http://127.0.0.1:8790"
@@ -146,11 +148,11 @@ Trust decides what each app sees. Apps only see events from stations their core 
 - each island's cores trust the other islands' cores, so their apps show the messages and receipts;
 - each island's cores trust the car, so the pickup and drop-off records show on their pages.
 
-Then pin keys in every site's `mule.toml`: each island's cores under `[[islands]]` (a core's own key always counts for its own island) and the cars' cores under `cars` (a car's own key always counts in the car). A message is carried and delivered only if it is signed by a key pinned for the island it says it comes from. The page warns about any island that messages go to but that has no pinned keys, since its receipts can't count. A club that already shares one signed trust list (`ridgewarden invite` and `join`) can add the car and the other island to it instead of `[trust] keys`; `[[islands]]` is still needed.
+Then pin keys in every site's `mule.toml`: each island's cores under `[[islands]]` (a core's own key always counts for its own island) and the cars' cores under `cars` (a car's own key always counts in the car). A message is carried and delivered only if it is signed by a key pinned for the island it says it comes from. The page warns about any island that messages go to but that has no pinned keys, since its receipts can't count. A mesh group that already shares one signed trust list (`ridgewarden invite` and `join`) can add the car and the other island to it instead of `[trust] keys`; `[[islands]]` is still needed.
 
 ### Offline content
 
-Run ridgewarden-library on both islands, and on the fetcher set `[mule] island` and `[mule] to` so it sends each new version to the other islands. The far library must trust the fetcher's core (`[trust]`), and the fetcher's core must be pinned to its island under `[[islands]]` at the cars and the far sites. The update waits for a courier like any bulk message, and big content needs a trip with that much room: English Wikipedia without pictures is about 49 GB.
+Run ridgewarden-library on both islands, and on the fetcher set `[mule] island` and `[mule] to` so it sends each new version to the other islands. The far library must trust the fetcher's core (`[trust]`), and the fetcher's core must be pinned to its island under `[[islands]]` at the cars and the far sites. The update waits for a courier like any bulk message, and a big file needs a trip with that much room (`--capacity-mb`).
 
 ### BPv7 bridge
 
@@ -178,13 +180,12 @@ Messages for `east` leave as bundles whose payload is the signed `mule.msg` even
 
 ## Limits
 
-- Tested end to end with three real cores, two simulated meshes and a laptop playing the car, never in a real car. [docs/car-kit.md](docs/car-kit.md) is a build guide for the kit (node, Pi, SSD, ignition-sensing 12 V power) and parking-lot syncs; it has not been built.
+- Tested end to end with three real core processes on one machine, on two simulated meshes, with a laptop core playing the car: `scripts/three-cores.sh` does it (see Building from source). Never run on real nodes, radios or Pis in the field, and never in a real car. [docs/car-kit.md](docs/car-kit.md) is a build guide for the kit (node, Pi, SSD, ignition-sensing 12 V power) and parking-lot syncs; it has not been built.
 - The BPv7 bridge follows dtnd's documented HTTP API and its source, and decodes bundles per RFC 9171; it has been tested against a stand-in dtnd, not a running one. It carries text only.
 - A drop-off is recorded when the car first sees a core answering with a pinned key on the destination island holding the message and its whole file. The key is what the core says over HTTP, which the mesh does not authenticate, so the car keeps the file until a signed receipt from a pinned key comes back. If the message also got there another way, the car still records a drop-off when it arrives.
 - A car that was pinned, picked a message up and never arrived holds that message up: other cars don't plan it again. Withdraw and resend it, or retire the car's key from `cars`.
 - Any trusted, pinned station can send a site a file up to the class limit (1 TB for bulk); there is no disk quota beyond what the core enforces.
 - Send-to-receipt times mix the sender's and the receiver's clocks; receipts that claim to be older than their message are counted as clock skew and left out. The drive times use the car's clock alone.
-- Files of 64 MB or less download from the message page (read into memory, two at a time); bigger ones stay in the core's export folder for copying off the box.
 - The car carries every author's main log, not only mule traffic; with `telemetry = false` that is messages, receipts and other apps' lasting records, which stay small.
 - Not done, because it isn't software: finding couriers who drive the route, finding nodes reachable from public parking, and a real message and receipt between two regions with no internet used (the spec's success measures). The corridor times page and `/api/corridors` are where that result would be published.
 
@@ -199,6 +200,8 @@ cd ridgewarden-mule
 cargo build --release
 cargo test
 ```
+
+`scripts/three-cores.sh` runs the whole story with real processes: it starts two simulated meshes and three cores from the core checkout (build it first), plus three of these apps, and sends an urgent message and a file through the web form, a file from the command line and a library update from north to south by car and the receipts back, making each island unreachable by restarting its core with a different peer list. It also checks that a second post straight after the first is told to wait (429), that both files arrive byte for byte, and that a byte range and a resumed download (`curl -C -`) come back right. It takes about four minutes and exits non-zero if any step fails.
 
 ## Contributing
 

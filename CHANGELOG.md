@@ -4,6 +4,17 @@ All notable changes to ridgewarden-mule are listed here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Expected arrival times: a planned or loaded message says when its trip's drive should reach the far island, and shows as overdue past that.
+- A couriers table on the Trips page: each courier's registered trips and departures due in the last 30 days next to the days a car logged them driving, and their last pickup and drop-off.
+- `scripts/three-cores.sh`, the end-to-end run with two simulated meshes, three cores and three apps, as a script anyone can repeat.
+
+### Changed
+
+- The send form writes a file to disk as it arrives instead of holding it in memory, up to `upload_max_mb` (4 GB by default) and the priority's own limit. The key and priority now come first on the form, nothing is written until they and the rest of the message check out, and an upload abandoned halfway is removed at once; one left by a crash or restart is removed at the next start. The service stops cleanly on SIGTERM. Only posts past the key take a slot: two uploads, and eight other posts, so neither idle posts nor long uploads lock out text messages.
+- Delivered files stream from disk instead of being read into memory, so any size downloads from the message page (the 64 MB limit is gone). Downloads resume with HTTP byte ranges (with the blob id as ETag, and If-Range), say `nosniff`, and four run at once; a client that takes nothing for two minutes gives its slot back.
+
 ## [0.1.0] - 2026-11-20
 
 ### Added
