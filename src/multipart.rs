@@ -1,18 +1,10 @@
-//! Just enough multipart/form-data (RFC 7578) to read the send form with its file.
+//! multipart/form-data (RFC 7578), parsed as the body arrives, so a file field can be
+//! written to disk a piece at a time instead of being held in memory.
 
+/// The forms have a handful of fields; anything with many more isn't one of them.
 const MAX_PARTS: usize = 32;
-
-pub struct Part<'a> {
-    pub name: String,
-    pub filename: Option<String>,
-    pub data: &'a [u8],
-}
-
-impl Part<'_> {
-    pub fn text(&self) -> String {
-        String::from_utf8_lossy(self.data).into_owned()
-    }
-}
+/// Room for a part's headers, and for whatever comes before the first boundary.
+const MAX_HEAD: usize = 8 * 1024;
 
 /// The boundary from a `multipart/form-data; boundary=...` content type.
 pub fn boundary(content_type: &str) -> Option<String> {
@@ -28,16 +20,26 @@ pub fn boundary(content_type: &str) -> Option<String> {
     })
 }
 
-fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
-    hay.get(from..)?
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|i| i + from)
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
 }
 
-/// The value of `key="..."` in a Content-Disposition header.
+/// The value of `key="..."` in a Content-Disposition header. A quoted value may hold a ';'.
 fn param(header: &str, key: &str) -> Option<String> {
-    header.split(';').skip(1).find_map(|p| {
+    let mut parts = vec![];
+    let (mut start, mut quoted) = (0, false);
+    for (i, c) in header.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            ';' if !quoted => {
+                parts.push(&header[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&header[start..]);
+    parts.into_iter().skip(1).find_map(|p| {
         let (k, v) = p.split_once('=')?;
         k.trim()
             .eq_ignore_ascii_case(key)
@@ -45,41 +47,144 @@ fn param(header: &str, key: &str) -> Option<String> {
     })
 }
 
-fn part(raw: &[u8]) -> Option<Part<'_>> {
-    let end = find(raw, b"\r\n\r\n", 0)?;
-    let head = std::str::from_utf8(&raw[..end]).ok()?;
-    let disp = head.split("\r\n").find(|l| {
-        l.split_once(':')
-            .is_some_and(|(k, _)| k.trim().eq_ignore_ascii_case("content-disposition"))
-    })?;
-    Some(Part {
-        name: param(disp, "name")?,
-        filename: param(disp, "filename"),
-        data: &raw[end + 4..],
-    })
+#[derive(Debug, PartialEq)]
+pub enum Ev {
+    /// a new part; `filename` is set for a file input, empty if none was chosen
+    Part {
+        name: String,
+        filename: Option<String>,
+    },
+    Data(Vec<u8>),
+    /// the current part is complete
+    End,
 }
 
-/// The form's parts, or None if the body isn't well-formed multipart.
-pub fn parse<'a>(body: &'a [u8], boundary: &str) -> Option<Vec<Part<'a>>> {
-    let delim = format!("\r\n--{boundary}");
-    let first = format!("--{boundary}");
-    let mut pos = find(body, first.as_bytes(), 0)? + first.len();
-    let mut out = vec![];
-    loop {
-        if body.get(pos..pos + 2)? == b"--" {
-            return Some(out);
+#[derive(Debug, PartialEq)]
+enum St {
+    Preamble,
+    AfterDelim,
+    Headers,
+    Body,
+    Done,
+}
+
+pub struct Parser {
+    /// "\r\n--boundary"; the body is read as if it began with "\r\n", so the first
+    /// boundary looks like every other one
+    delim: Vec<u8>,
+    buf: Vec<u8>,
+    st: St,
+    parts: usize,
+}
+
+impl Parser {
+    pub fn new(boundary: &str) -> Parser {
+        Parser {
+            delim: format!("\r\n--{boundary}").into_bytes(),
+            buf: b"\r\n".to_vec(),
+            st: St::Preamble,
+            parts: 0,
         }
-        if body.get(pos..pos + 2)? != b"\r\n" {
-            return None;
+    }
+
+    /// Take the next piece of the body; returns what it completes. Data is handed out as
+    /// soon as it can't be the start of a boundary, so memory stays at about one piece.
+    pub fn feed(&mut self, chunk: &[u8]) -> Result<Vec<Ev>, &'static str> {
+        self.buf.extend_from_slice(chunk);
+        let mut out = vec![];
+        loop {
+            match self.st {
+                St::Preamble => match find(&self.buf, &self.delim) {
+                    Some(i) => {
+                        self.buf.drain(..i + self.delim.len());
+                        self.st = St::AfterDelim;
+                    }
+                    None if self.buf.len() > MAX_HEAD => return Err("no form boundary found"),
+                    None => return Ok(out),
+                },
+                St::AfterDelim => {
+                    if self.buf.len() < 2 {
+                        return Ok(out);
+                    }
+                    match &self.buf[..2] {
+                        b"--" => {
+                            self.st = St::Done;
+                            self.buf.clear();
+                        }
+                        b"\r\n" => {
+                            self.buf.drain(..2);
+                            self.st = St::Headers;
+                        }
+                        _ => return Err("broken form boundary"),
+                    }
+                }
+                St::Headers => {
+                    let Some(end) = find(&self.buf, b"\r\n\r\n") else {
+                        if self.buf.len() > MAX_HEAD {
+                            return Err("form part headers too long");
+                        }
+                        return Ok(out);
+                    };
+                    self.parts += 1;
+                    if self.parts > MAX_PARTS {
+                        return Err("too many form fields");
+                    }
+                    let head = std::str::from_utf8(&self.buf[..end])
+                        .map_err(|_| "form part headers are not text")?;
+                    let disp = head
+                        .split("\r\n")
+                        .find(|l| {
+                            l.split_once(':').is_some_and(|(k, _)| {
+                                k.trim().eq_ignore_ascii_case("content-disposition")
+                            })
+                        })
+                        .ok_or("form part without a name")?;
+                    out.push(Ev::Part {
+                        name: param(disp, "name").ok_or("form part without a name")?,
+                        filename: param(disp, "filename"),
+                    });
+                    self.buf.drain(..end + 4);
+                    self.st = St::Body;
+                }
+                St::Body => match find(&self.buf, &self.delim) {
+                    Some(i) => {
+                        if i > 0 {
+                            out.push(Ev::Data(self.buf[..i].to_vec()));
+                        }
+                        out.push(Ev::End);
+                        self.buf.drain(..i + self.delim.len());
+                        self.st = St::AfterDelim;
+                    }
+                    None => {
+                        // keep what could be the start of a boundary split across pieces
+                        let keep = self.delim.len() - 1;
+                        if self.buf.len() > keep {
+                            let n = self.buf.len() - keep;
+                            out.push(Ev::Data(self.buf.drain(..n).collect()));
+                        }
+                        return Ok(out);
+                    }
+                },
+                St::Done => {
+                    self.buf.clear();
+                    return Ok(out);
+                }
+            }
         }
-        pos += 2;
-        // the forms have a handful of fields; anything with many more isn't one of them
-        if out.len() >= MAX_PARTS {
-            return None;
+    }
+
+    /// The closing boundary has been read; whatever follows it is ignored.
+    pub fn done(&self) -> bool {
+        self.st == St::Done
+    }
+
+    /// The body ended; it must have ended with the closing boundary.
+    pub fn finish(&self) -> Result<(), &'static str> {
+        if self.st == St::Done {
+            Ok(())
+        } else {
+            Err("the form ended early")
         }
-        let next = find(body, delim.as_bytes(), pos)?;
-        out.push(part(&body[pos..next])?);
-        pos = next + delim.len();
     }
 }
 
@@ -101,19 +206,69 @@ mod tests {
         b
     }
 
+    type Parts = Vec<(String, Option<String>, Vec<u8>)>;
+
+    /// Feed `b` in pieces of `n` bytes and put the parts back together.
+    fn parts(b: &[u8], n: usize) -> Result<Parts, &'static str> {
+        let mut p = Parser::new(B);
+        let mut out: Parts = vec![];
+        for c in b.chunks(n) {
+            for ev in p.feed(c)? {
+                match ev {
+                    Ev::Part { name, filename } => out.push((name, filename, vec![])),
+                    Ev::Data(d) => out.last_mut().unwrap().2.extend(d),
+                    Ev::End => {}
+                }
+            }
+        }
+        p.finish()?;
+        Ok(out)
+    }
+
     #[test]
-    fn reads_fields_and_a_file() {
-        let file = b"line one\r\n--not the boundary\r\n\x00\xff";
+    fn reads_fields_and_a_file_however_the_body_is_split() {
+        // pieces of the boundary, but never the whole "\r\n------x7", which a body can't hold
+        let file = b"line one\r\n--not the boundary\r\n------x\x00\xff\r\n------x almost\r\n-";
         let b = body(file);
-        let parts = parse(&b, B).unwrap();
-        assert_eq!(parts.len(), 2);
+        for n in [1, 2, 3, 7, 13, 64, b.len()] {
+            let p = parts(&b, n).unwrap();
+            assert_eq!(p.len(), 2, "pieces of {n}");
+            assert_eq!(p[0], ("to".into(), None, b"south".to_vec()));
+            assert_eq!(
+                p[1],
+                ("file".into(), Some("list.txt".into()), file.to_vec()),
+                "pieces of {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn data_is_handed_out_as_it_arrives() {
+        let mut p = Parser::new(B);
+        let head =
+            b"------x7\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a\"\r\n\r\n";
+        p.feed(head).unwrap();
+        let evs = p.feed(&[b'z'; 100_000]).unwrap();
+        let got: usize = evs
+            .iter()
+            .map(|e| match e {
+                Ev::Data(d) => d.len(),
+                _ => 0,
+            })
+            .sum();
         assert_eq!(
-            (parts[0].name.as_str(), parts[0].text()),
-            ("to", "south".into())
+            got,
+            100_000 - (B.len() + 3),
+            "only a boundary's length is held back"
         );
-        assert_eq!(parts[0].filename, None);
-        assert_eq!(parts[1].filename.as_deref(), Some("list.txt"));
-        assert_eq!(parts[1].data, file);
+    }
+
+    #[test]
+    fn truncated_or_broken_bodies_are_refused() {
+        let b = body(b"abc");
+        assert!(parts(&b[..b.len() - 12], 5).is_err());
+        assert!(parts(b"nothing here", 4).is_err());
+        assert!(parts(&vec![b'x'; MAX_HEAD + 10], 100).is_err());
     }
 
     #[test]
@@ -121,30 +276,18 @@ mod tests {
         let mut b = Vec::new();
         for _ in 0..40 {
             b.extend_from_slice(
-                b"------x7
-
-Content-Disposition: form-data; name=\"a\"
-
-
-
-x
-
-",
+                b"------x7\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\nx\r\n",
             );
         }
-        b.extend_from_slice(
-            b"------x7--
-
-",
-        );
-        assert!(parse(&b, B).is_none());
+        b.extend_from_slice(b"------x7--\r\n");
+        assert_eq!(parts(&b, 50).unwrap_err(), "too many form fields");
     }
 
     #[test]
-    fn truncated_bodies_are_refused() {
-        let b = body(b"abc");
-        assert!(parse(&b[..b.len() - 12], B).is_none());
-        assert!(parse(b"nothing here", B).is_none());
+    fn a_quoted_file_name_may_hold_a_semicolon() {
+        let h = "form-data; name=\"file\"; filename=\"a;b.pdf\"";
+        assert_eq!(param(h, "filename").as_deref(), Some("a;b.pdf"));
+        assert_eq!(param(h, "name").as_deref(), Some("file"));
     }
 
     #[test]

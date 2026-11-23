@@ -1,3 +1,4 @@
+use std::future::IntoFuture;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -231,6 +232,20 @@ fn main() -> Result<()> {
     }
 }
 
+/// Ctrl-C, or SIGTERM from systemd when the service is stopped or upgraded.
+async fn shutdown() {
+    #[cfg(unix)]
+    if let Ok(mut term) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+        return;
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 async fn caught_up(cfg: Config) -> Result<App> {
     let app = App::new(cfg)?;
     app.pin().await.context("asking the core who it is")?;
@@ -279,11 +294,12 @@ async fn print_manifest(cfg: Config) -> Result<()> {
             Drive::Trip {
                 trip, depart_ms, ..
             } => println!(
-                "Drive: {} to {}, {} leaving {}",
+                "Drive: {} to {}, {} leaving {}, arriving about {}",
                 trip.from,
                 trip.to,
                 trip.courier,
-                short_time(*depart_ms)
+                short_time(*depart_ms),
+                short_time(depart_ms + trip.length_ms())
             ),
             Drive::AdHoc => println!("Drive: not a registered trip"),
         }
@@ -307,11 +323,12 @@ async fn print_manifest(cfg: Config) -> Result<()> {
     let p = app.plan(now)?;
     for r in p.runs.iter().filter(|r| !r.load.is_empty()) {
         println!(
-            "{} to {}, {} leaving {} ({} of {}):",
+            "{} to {}, {} leaving {}, arriving about {} ({} of {}):",
             r.trip.from,
             r.trip.to,
             r.trip.courier,
             short_time(r.depart_ms),
+            short_time(r.arrives_ms()),
             size_text(r.bytes),
             size_text(r.trip.capacity_bytes())
         );
@@ -333,6 +350,7 @@ async fn print_manifest(cfg: Config) -> Result<()> {
 
 async fn run(cfg: Config) -> Result<()> {
     let listen = cfg.listen;
+    ridgewarden_mule::send::sweep(&cfg, std::time::SystemTime::now());
     let app = Arc::new(App::new(cfg)?);
     tracing::info!(
         "ridgewarden-mule {} following {}, page on http://{listen}",
@@ -343,13 +361,27 @@ async fn run(cfg: Config) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("binding {listen}"))?;
-    axum::serve(
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown().await;
+        let _ = tx.send(true);
+    });
+    let stopping = |mut rx: tokio::sync::watch::Receiver<bool>| async move {
+        let _ = rx.wait_for(|s| *s).await;
+    };
+    let server = axum::serve(
         listener,
         web::router(app).into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(async {
-        let _ = tokio::signal::ctrl_c().await;
-    })
-    .await?;
+    .with_graceful_shutdown(stopping(rx.clone()));
+    // an upload over a slow link could hold a graceful stop for hours; give open posts a
+    // few seconds, and the next start removes what they left
+    tokio::select! {
+        r = server.into_future() => r?,
+        _ = async {
+            stopping(rx).await;
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        } => tracing::info!("stopped with posts still open"),
+    }
     Ok(())
 }

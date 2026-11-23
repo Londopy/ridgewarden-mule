@@ -28,6 +28,9 @@ pub struct Config {
     /// send, carry and deliver messages written on behalf of people without a licence
     #[serde(default)]
     pub third_party: bool,
+    /// the biggest file the send form takes, written to disk as it arrives
+    #[serde(default = "d_upload")]
+    pub upload_max_mb: u64,
     /// the islands this site deals with: whose receipts count, and where their cores answer
     #[serde(default)]
     pub islands: Vec<IslandCfg>,
@@ -114,6 +117,9 @@ fn d_token() -> PathBuf {
 }
 fn d_imports() -> PathBuf {
     PathBuf::from("/var/lib/ridgewarden/imports")
+}
+fn d_upload() -> u64 {
+    4_000
 }
 fn d_capacity() -> u64 {
     8_000
@@ -309,6 +315,10 @@ operator = ""
 # Part 97.115 third-party traffic (messages written on behalf of people without a licence)
 # is refused, not carried and not delivered unless this is true.
 third_party = false
+
+# The biggest file the send form takes. Uploads go to disk as they arrive, so this is
+# about the Pi's disk, not its memory; the send command has no limit but the class's.
+upload_max_mb = 4000
 
 # The cars' core keys. Pickups and drop-offs from any other station are ignored, so a
 # stray record can't make a message look picked up.

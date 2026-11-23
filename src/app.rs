@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -18,6 +18,21 @@ use crate::plan::Plan;
 use crate::trips::Trips;
 
 pub const PROJECTIONS: &[&dyn Projection] = &[&Mule, &Trips];
+
+pub const DOWNLOADS: usize = 4;
+
+pub struct Address {
+    pub last: Option<Instant>,
+    pub open: usize,
+}
+
+/// How long a post may take: in all before a file part has shown the key (which is all of
+/// a small form), and between pieces after that.
+#[derive(Clone, Copy)]
+pub struct PostWaits {
+    pub before_key: Duration,
+    pub idle: Duration,
+}
 
 /// This site's own state, never rebuilt from the feed.
 const LOCAL: &str = "
@@ -53,12 +68,17 @@ pub struct App {
     pub http: reqwest::Client,
     /// what the send form asks for; None if the key file couldn't be read or made
     pub send_key: Option<String>,
-    /// last send-form post per address, to slow down key guessing
-    pub posts: Mutex<HashMap<IpAddr, Instant>>,
-    /// uploads read into memory at once; each can be the form's whole size limit
+    /// each address's last post and how many it has open, to slow down key guessing
+    pub posts: Mutex<HashMap<IpAddr, Address>>,
+    pub post_waits: PostWaits,
+    /// a download that takes nothing for this long gives its slot back
+    pub download_stall: Duration,
+    /// send-form posts that may carry a file, at once; each holds a disk write open
     pub uploads: Semaphore,
-    /// file downloads read into memory at once
-    pub downloads: Semaphore,
+    /// the other forms' posts at once
+    pub forms: Semaphore,
+    /// file downloads streaming at once, so a few slow clients can't use every disk read
+    pub downloads: Arc<Semaphore>,
     /// whether dtnd has our endpoint registered since this app started
     pub dtnd_registered: AtomicBool,
     who: Mutex<Option<Whoami>>,
@@ -98,8 +118,14 @@ impl App {
                 .build()?,
             send_key,
             posts: Mutex::new(HashMap::new()),
+            download_stall: Duration::from_secs(120),
+            post_waits: PostWaits {
+                before_key: Duration::from_secs(30),
+                idle: Duration::from_secs(60),
+            },
             uploads: Semaphore::new(2),
-            downloads: Semaphore::new(2),
+            forms: Semaphore::new(8),
+            downloads: Arc::new(Semaphore::new(DOWNLOADS)),
             dtnd_registered: AtomicBool::new(false),
             who: Mutex::new(None),
             cfg,

@@ -21,11 +21,70 @@ pub struct Outgoing {
     pub on_behalf: Option<String>,
 }
 
-/// A file copied into the core's import folder, ready to publish.
+/// A file copied into the core's import folder, ready to publish. The copy goes when this
+/// does: once the core has the chunks, or when the send was refused or abandoned.
 pub struct Staged {
     pub path: PathBuf,
     pub name: String,
     pub size: u64,
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        let path = std::mem::take(&mut self.path);
+        // unlinking a big file can take a while; not on an async worker if there is a choice
+        match tokio::runtime::Handle::try_current() {
+            Ok(rt) => {
+                rt.spawn_blocking(move || unstage(&path));
+            }
+            Err(_) => unstage(&path),
+        }
+    }
+}
+
+fn unstage(path: &Path) {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            tracing::warn!("removing {}: {e}", path.display());
+        }
+        _ => {}
+    }
+}
+
+/// Where the send form's uploads go in the import folder. A restart drops any upload in
+/// progress, so at startup every one of these is a leftover.
+pub const UPLOAD_PREFIX: &str = "mule-up-";
+/// Where the `send` command's copies go. Another one may be running while the service
+/// starts, so only a day-old copy is taken for a leftover.
+pub const COPY_PREFIX: &str = "mule-";
+
+/// Remove what unfinished sends left in the import folder (a crash, or a restart in the
+/// middle of an upload); returns how many files went.
+pub fn sweep(cfg: &Config, now: std::time::SystemTime) -> usize {
+    let Ok(dir) = std::fs::read_dir(&cfg.core.imports_dir) else {
+        return 0;
+    };
+    let day_old = now - std::time::Duration::from_secs(86_400);
+    let mut n = 0;
+    for e in dir.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t < day_old);
+        let leftover = name.starts_with(UPLOAD_PREFIX) || (name.starts_with(COPY_PREFIX) && old);
+        if !leftover {
+            continue;
+        }
+        match std::fs::remove_file(e.path()) {
+            Ok(()) => {
+                n += 1;
+                tracing::info!("removed {}, left by an unfinished send", e.path().display());
+            }
+            Err(err) => tracing::warn!("removing {}: {err}", e.path().display()),
+        }
+    }
+    n
 }
 
 /// Letters, digits, '-', '_' and '.', without a leading dot: safe as a file name anywhere.
@@ -139,7 +198,8 @@ pub fn payload(cfg: &Config, o: &Outgoing, file_size: Option<u64>) -> Result<Val
     Ok(p)
 }
 
-fn staged_path(cfg: &Config, name: &str) -> Result<PathBuf> {
+/// A fresh name in the core's import folder for a file called `name`.
+pub fn staged_path(cfg: &Config, prefix: &str, name: &str) -> Result<PathBuf> {
     std::fs::create_dir_all(&cfg.core.imports_dir)
         .with_context(|| format!("creating {}", cfg.core.imports_dir.display()))?;
     let tag = hex::encode(
@@ -150,7 +210,7 @@ fn staged_path(cfg: &Config, name: &str) -> Result<PathBuf> {
     Ok(cfg
         .core
         .imports_dir
-        .join(format!("mule-{tag}-{}", plain(name))))
+        .join(format!("{prefix}{tag}-{}", plain(name))))
 }
 
 /// Copy a local file into the core's import folder.
@@ -159,7 +219,7 @@ pub fn stage_file(cfg: &Config, src: &Path) -> Result<Staged> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "file".into());
-    let path = staged_path(cfg, &name)?;
+    let path = staged_path(cfg, COPY_PREFIX, &name)?;
     let size = std::fs::copy(src, &path)
         .with_context(|| format!("copying {} to {}", src.display(), path.display()))?;
     // copy keeps the source's mode; an owner-only source would be unreadable to the core
@@ -171,17 +231,6 @@ pub fn stage_file(cfg: &Config, src: &Path) -> Result<Staged> {
     Ok(Staged { path, name, size })
 }
 
-/// Write uploaded bytes into the core's import folder.
-pub fn stage_bytes(cfg: &Config, name: &str, data: &[u8]) -> Result<Staged> {
-    let path = staged_path(cfg, name)?;
-    std::fs::write(&path, data).with_context(|| format!("writing {}", path.display()))?;
-    Ok(Staged {
-        path,
-        name: name.to_string(),
-        size: data.len() as u64,
-    })
-}
-
 /// Publish the file (if any) at the class's priority, then sign and log the message.
 pub async fn send(
     core: &CoreClient,
@@ -189,15 +238,7 @@ pub async fn send(
     o: &Outgoing,
     file: Option<Staged>,
 ) -> Result<Event> {
-    let checked = payload(cfg, o, file.as_ref().map(|f| f.size));
-    let mut p = match (checked, &file) {
-        (Ok(p), _) => p,
-        (Err(e), Some(f)) => {
-            unstage(&f.path);
-            return Err(e);
-        }
-        (Err(e), None) => return Err(e),
-    };
+    let mut p = payload(cfg, o, file.as_ref().map(|f| f.size))?;
     if let Some(f) = file {
         let staged = f
             .path
@@ -206,27 +247,46 @@ pub async fn send(
             .to_string_lossy()
             .into_owned();
         let blob_name = format!("{BLOB_PREFIX}{}", plain(&f.name));
-        let added = core
+        let root = core
             .blob_add(&staged, &blob_name, o.class.blob_priority())
-            .await;
-        // the core has the chunks now (or refused them); the copy is no longer needed
-        unstage(&f.path);
-        let root = added?;
+            .await?;
         let name: String = f.name.chars().take(200).collect();
         p["file"] = json!({"root": root, "name": name, "size": f.size});
     }
     core.append("mule.msg", p).await
 }
 
-fn unstage(p: &Path) {
-    if let Err(e) = std::fs::remove_file(p) {
-        tracing::warn!("removing {}: {e}", p.display());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_removes_every_upload_and_day_old_copies() {
+        let d = tempfile::tempdir().unwrap();
+        let mut c = cfg();
+        c.core.imports_dir = d.path().to_path_buf();
+        let now = std::time::SystemTime::now();
+        let make = |name: &str, age_s: u64| {
+            let f = std::fs::File::create(d.path().join(name)).unwrap();
+            f.set_modified(now - std::time::Duration::from_secs(age_s))
+                .unwrap();
+        };
+        make("mule-up-1a2b-tiles.bin", 5);
+        make("mule-9f8e-old.zip", 2 * 86_400);
+        make("mule-7c6d-new.zip", 60);
+        make("lib.pmtiles", 3 * 86_400);
+        assert_eq!(sweep(&c, now), 2);
+        let mut left: Vec<String> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            ["lib.pmtiles", "mule-7c6d-new.zip"],
+            "another app's file and a send in progress stay"
+        );
+    }
 
     fn cfg() -> Config {
         toml::from_str("island = \"north\"\noperator = \"N0AAA\"").unwrap()
