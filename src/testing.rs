@@ -58,6 +58,8 @@ pub struct Core {
     pub files: HashMap<String, Vec<u8>>,
     pub wants: Vec<String>,
     pub unwants: Vec<String>,
+    /// files published with blob/add: name, size and BLAKE3 of the content
+    pub added: Vec<(String, u64, String)>,
     pub export_dir: PathBuf,
     seq: u64,
 }
@@ -157,6 +159,26 @@ async fn unwant(State(s): S, Json(r): Json<RootReq>) -> Json<Value> {
     Json(json!({"freed": 1}))
 }
 
+#[derive(Deserialize)]
+struct AddReq {
+    file: String,
+    name: String,
+}
+
+/// Publish a file from the import folder, which `app` puts next to the export folder.
+async fn add(State(s): S, Json(r): Json<AddReq>) -> Response {
+    let dir = s.lock().unwrap().export_dir.join("imports");
+    let Ok(data) = std::fs::read(dir.join(&r.file)) else {
+        return (StatusCode::NOT_FOUND, "no such file in the import folder").into_response();
+    };
+    let hash = blake3::hash(&data).to_hex().to_string();
+    s.lock()
+        .unwrap()
+        .added
+        .push((r.name, data.len() as u64, hash.clone()));
+    Json(json!({"root": hash})).into_response()
+}
+
 async fn export(State(s): S, Json(r): Json<RootReq>) -> Response {
     let s = s.lock().unwrap();
     let (Some(data), Some(name)) = (s.files.get(&r.root), r.name) else {
@@ -200,6 +222,7 @@ impl FakeCore {
             .route("/local/v1/blob/want", post(want))
             .route("/local/v1/blob/unwant", post(unwant))
             .route("/local/v1/blob/export", post(export))
+            .route("/local/v1/blob/add", post(add))
             .with_state(state.clone());
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());

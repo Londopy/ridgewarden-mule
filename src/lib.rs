@@ -12,6 +12,7 @@ pub mod car;
 pub mod cbor;
 pub mod config;
 pub mod deliver;
+pub mod download;
 pub mod forms;
 pub mod held;
 pub mod mule;

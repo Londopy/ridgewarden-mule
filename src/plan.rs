@@ -38,6 +38,12 @@ pub struct Run {
     pub bytes: u64,
 }
 
+impl Run {
+    pub fn arrives_ms(&self) -> i64 {
+        self.depart_ms + self.trip.length_ms()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Why {
     NoTrip,
@@ -59,6 +65,8 @@ pub struct Plan {
     pub cargo: Vec<Cargo>,
     pub runs: Vec<Run>,
     pub unplanned: Vec<(usize, Why)>,
+    /// every registered trip, for arrival times of loads already on the road
+    pub trips: Vec<Trip>,
 }
 
 impl Plan {
@@ -150,6 +158,7 @@ pub fn plan(cargo: Vec<Cargo>, trips: &[Trip], now: i64) -> Plan {
         cargo,
         runs,
         unplanned,
+        trips: trips.to_vec(),
     }
 }
 

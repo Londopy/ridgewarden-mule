@@ -5,9 +5,8 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use axum::extract::{DefaultBodyLimit, Query, State};
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -16,18 +15,19 @@ use ridgewarden_client::util::{esc, human_duration, now_ms, short_time};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::app::App;
+use crate::app::{App, DOWNLOADS};
 use crate::car::{self, Drive};
 use crate::config::Config;
-use crate::forms::{self, MAX_UPLOAD};
+use crate::forms;
 use crate::mule::{self, Class, Corridor, State as Trip, View, is_id};
 use crate::plan::Plan;
-use crate::send::{plain, size_text};
+use crate::send::size_text;
 use crate::trips;
 
 const STYLE: &str = "<style>
 form.send label{display:block;margin:10px 0}
-form.send input,form.send select,form.send textarea{font:inherit;padding:6px 8px;width:100%;max-width:34em}
+form.send input,form.send select,form.send textarea{display:block;margin-top:4px;font:inherit;padding:6px 8px;width:100%;max-width:34em}
+main p{overflow-wrap:anywhere}
 form.send button,form.inline button{font:inherit;padding:6px 14px;margin-top:6px}
 form.inline{display:inline}
 pre.text{white-space:pre-wrap;background:var(--card);padding:10px 12px;border-radius:6px;font:inherit}
@@ -43,12 +43,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/", get(mule_page))
         .route("/list", get(list_page))
         .route("/msg", get(msg_page))
-        .route(
-            "/send",
-            get(send_page)
-                .post(forms::send_post)
-                .layer(DefaultBodyLimit::max(MAX_UPLOAD + 64 * 1024)),
-        )
+        .route("/send", get(send_page).post(forms::send_post))
         .route("/withdraw", post(forms::withdraw_post))
         .route("/trips", get(trips_page).post(forms::trips_post))
         .route("/manifest", get(manifest_page))
@@ -120,10 +115,12 @@ fn class_pill(c: Class) -> String {
 
 fn run_text(r: &crate::plan::Run) -> String {
     format!(
-        "{} on {} ({})",
+        "{} on {} ({}), expected at {} about {}",
         esc(&r.trip.courier),
         short_time(r.depart_ms),
-        esc(&r.trip.id)
+        esc(&r.trip.id),
+        esc(&r.trip.to),
+        short_time(r.arrives_ms())
     )
 }
 
@@ -150,7 +147,26 @@ fn trip(v: &View, plan: Option<&Plan>, now: i64) -> String {
         }
         Trip::InTransit => {
             let h = &v.pickups[0];
-            format!("picked up by {} {}", car(h), short_time(h.ms))
+            let mut t = format!("picked up by {} {}", car(h), short_time(h.ms));
+            let Some(key) = h.trip.as_deref() else {
+                t.push_str("; not a registered trip, so no expected time");
+                return t;
+            };
+            match plan.and_then(|p| crate::trips::arrival(&p.trips, key, h.ms)) {
+                Some(ms) if ms >= now => {
+                    let _ = write!(
+                        t,
+                        "; expected at {} about {}",
+                        esc(&v.msg.to_island),
+                        short_time(ms)
+                    );
+                }
+                Some(ms) => {
+                    let _ = write!(t, "; overdue, expected about {}", short_time(ms));
+                }
+                None => {}
+            }
+            t
         }
         Trip::HandedOver => {
             let h = &v.dropoffs[0];
@@ -348,7 +364,7 @@ pub fn mule_body(
     b.push_str(&rows(&waiting.views, Some(plan), now));
     b.push_str(&more(waiting, "waiting"));
     b.push_str("<h2>In transit</h2>");
-    b.push_str(&rows(&moving.views, None, now));
+    b.push_str(&rows(&moving.views, Some(plan), now));
     b.push_str(&more(moving, "in_transit"));
     b.push_str("<h2>Delivered</h2>");
     b.push_str(&rows(&done.views, None, now));
@@ -434,11 +450,12 @@ pub struct Local {
     pub receipts: Vec<(mule::Receipt, bool)>,
     pub bundle: Option<(String, i64)>,
     pub mine: bool,
-    pub plan: Option<String>,
+    /// where it is, in words, with its expected arrival
+    pub status: String,
 }
 
 /// One message with its whole trip, including who was control operator for each hop.
-pub fn msg_body(v: &View, l: &Local, now: i64) -> String {
+pub fn msg_body(v: &View, l: &Local) -> String {
     let m = &v.msg;
     let mut b = format!(
         "<h1>{} to {}</h1><p>{} {}</p>",
@@ -485,20 +502,11 @@ pub fn msg_body(v: &View, l: &Local, now: i64) -> String {
         match &l.saved {
             Some(mule::Saved {
                 path: Some(path), ..
-            }) if f.size as usize <= MAX_UPLOAD => {
+            }) => {
                 let _ = write!(
                     b,
                     "<p><a href=\"/file?id={}\">Download</a> <span class=\"mute small\">(saved and checked here as {})</span></p>",
                     m.id,
-                    esc(path)
-                );
-            }
-            Some(mule::Saved {
-                path: Some(path), ..
-            }) => {
-                let _ = write!(
-                    b,
-                    "<p>Saved and checked here as {}. It is too big to download from this page; copy it off the box.</p>",
                     esc(path)
                 );
             }
@@ -517,9 +525,6 @@ pub fn msg_body(v: &View, l: &Local, now: i64) -> String {
             }
             _ => {}
         }
-    }
-    if let Some(p) = &l.plan {
-        let _ = write!(b, "<p>Plan: {p}.</p>");
     }
     if let Some((eid, ms)) = &l.bundle {
         let _ = write!(
@@ -579,7 +584,7 @@ pub fn msg_body(v: &View, l: &Local, now: i64) -> String {
         let _ = write!(b, "<tr><td>{}</td><td>{what}</td></tr>", short_time(ms));
     }
     b.push_str("</table></div>");
-    let _ = write!(b, "<p class=\"mute small\">{}</p>", trip(v, None, now));
+    let _ = write!(b, "<p class=\"mute small\">{}</p>", l.status);
     if l.mine && !matches!(v.state, Trip::Delivered | Trip::Withdrawn) {
         let _ = write!(
             b,
@@ -619,16 +624,10 @@ async fn msg_page(State(app): State<Arc<App>>, Query(q): Query<IdQ>) -> Result<R
     };
     let me = app.whoami().await.ok().map(|w| w.key);
     let now = now_ms();
-    let plan = if v.state == Trip::Waiting {
-        let p = app.plan(now)?;
-        p.find(&v.msg.id)
-            .and_then(|i| match (p.run_of(i), p.why(i)) {
-                (Some(r), _) => Some(format!("goes with {}", run_text(r))),
-                (None, Some(w)) => Some(w.text().to_string()),
-                _ => None,
-            })
-    } else {
-        None
+    // only a message still on its way has a departure or an arrival to show
+    let status = match v.state {
+        Trip::Waiting | Trip::InTransit => trip(&v, Some(&app.plan(now)?), now),
+        _ => trip(&v, None, now),
     };
     // one lock at a time: a guard in a struct literal lives until the whole literal is built
     let saved = mule::saved(&app.db(), &v.msg.id)?;
@@ -638,15 +637,19 @@ async fn msg_page(State(app): State<Arc<App>>, Query(q): Query<IdQ>) -> Result<R
         receipts,
         bundle: crate::bpv7::sent_as(&app, &v.msg.id)?,
         mine: me.as_deref() == Some(v.msg.author.as_str()),
-        plan,
+        status,
     };
-    let body = msg_body(&v, &l, now);
+    let body = msg_body(&v, &l);
     Ok(page(&app, "", "Message", &body, false)
         .await
         .into_response())
 }
 
-async fn file(State(app): State<Arc<App>>, Query(q): Query<IdQ>) -> Result<Response, Fail> {
+async fn file(
+    State(app): State<Arc<App>>,
+    Query(q): Query<IdQ>,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, Fail> {
     let file = find(&app, &q.id)?.and_then(|v| v.msg.file);
     let saved = match &file {
         Some(_) => mule::saved(&app.db(), &q.id)?.and_then(|s| s.path),
@@ -659,32 +662,27 @@ async fn file(State(app): State<Arc<App>>, Query(q): Query<IdQ>) -> Result<Respo
         )
             .into_response());
     };
-    if f.size as usize > MAX_UPLOAD {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            format!("too big to serve here; it is saved as {path}"),
-        )
-            .into_response());
-    }
-    let Ok(_permit) = app.downloads.try_acquire() else {
+    let Ok(slot) = app.downloads.clone().try_acquire_owned() else {
         return Ok((
             StatusCode::TOO_MANY_REQUESTS,
-            "two downloads are already going; try again shortly",
+            format!("{DOWNLOADS} downloads are already going; try again shortly"),
         )
             .into_response());
     };
-    let data = tokio::task::spawn_blocking(move || std::fs::read(&path)).await??;
-    Ok((
-        [
-            (CONTENT_TYPE, "application/octet-stream".to_string()),
-            (
-                CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", plain(&f.name)),
-            ),
-        ],
-        data,
-    )
-        .into_response())
+    let etag = format!("\"{}\"", f.root);
+    let on_disk = std::path::Path::new(&path);
+    match crate::download::serve(on_disk, &f.name, &etag, &headers, slot, app.download_stall).await
+    {
+        Ok(r) => Ok(r),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((
+            StatusCode::NOT_FOUND,
+            format!("{path} is gone from the core's export folder"),
+        )
+            .into_response()),
+        Err(e) => Err(Fail(
+            anyhow::Error::new(e).context(format!("reading {path}")),
+        )),
+    }
 }
 
 async fn corridors_json(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, Fail> {
@@ -727,7 +725,8 @@ pub fn send_form(app: &App, f: &Fields, islands: &[String], error: Option<&str>)
         "<p class=\"mute small\">Messages are signed by this site's core under its licensee's callsign, \
          name you as the operator who wrote them, and are never encrypted: anyone on the mesh can read them. \
          No business traffic. Urgent goes first, so keep it short.</p>\
-         <form class=send method=post action=\"/send\" enctype=\"multipart/form-data\">",
+         <form class=send method=post action=\"/send\" enctype=\"multipart/form-data\">\
+         <label>Send key<input type=password name=key required autocomplete=off></label>",
     );
     let from = if f.from.is_empty() {
         &app.cfg.operator
@@ -763,17 +762,18 @@ pub fn send_form(app: &App, f: &Fields, islands: &[String], error: Option<&str>)
         let hint = match c {
             Class::Urgent => format!("urgent (short; files up to {})", size_text(c.max_file())),
             Class::Routine => format!("routine (files up to {})", size_text(c.max_file())),
-            Class::Bulk => "bulk (big files, goes last)".to_string(),
+            Class::Bulk => format!(
+                "bulk (big files, goes last; up to {} through this page)",
+                size_text(app.cfg.upload_max_mb.saturating_mul(1_000_000))
+            ),
         };
         let _ = write!(b, "<option value={}{sel}>{hint}</option>", c.name());
     }
     let _ = write!(
         b,
-        "</select></label><label>Message<textarea name=text rows=6 maxlength={}>{}</textarea></label>\
-         <label>File (optional, up to {}; use the send command for bigger)<input type=file name=file></label>",
+        "</select></label><label>Message<textarea name=text rows=6 maxlength={}>{}</textarea></label>",
         mule::MAX_TEXT,
         esc(&f.text),
-        size_text(MAX_UPLOAD as u64)
     );
     if app.cfg.third_party {
         let _ = write!(
@@ -782,8 +782,10 @@ pub fn send_form(app: &App, f: &Fields, islands: &[String], error: Option<&str>)
             esc(&f.on_behalf)
         );
     }
+    // the file comes last: the server checks the key and priority above it before
+    // writing any of it to disk
     b.push_str(
-        "<label>Send key<input type=password name=key required autocomplete=off></label>\
+        "<label>File (optional, up to the priority's limit)<input type=file name=file></label>\
          <button type=submit>Send</button></form>\
          <p class=\"mute small\">The send key is in this site's <code>send.key</code> file; ask the station's owner. \
          It goes over the mesh in clear like everything else, so it keeps visitors out, not eavesdroppers.</p>",
@@ -856,6 +858,55 @@ fn trips_table(all: &[trips::Trip], me: Option<&str>, now: i64) -> String {
     b
 }
 
+const MONTH: i64 = 30 * 86_400_000;
+
+/// Who has been driving: the cars' records next to what each courier registered, so the
+/// people running the mesh can see which trips really happen.
+pub fn couriers_table(all: &[trips::Trip], seen: &[mule::Seen], now: i64) -> String {
+    let mut calls: Vec<&str> = all
+        .iter()
+        .map(|t| t.courier.as_str())
+        .chain(seen.iter().map(|s| s.call.as_str()))
+        .collect();
+    calls.sort();
+    calls.dedup();
+    if calls.is_empty() {
+        return String::new();
+    }
+    let mut b = String::from(
+        "<h2>Couriers</h2><div class=wrap><table><tr><th>Courier</th><th class=n>Trips</th>         <th class=n>Departures due, last 30 days</th><th class=n>Days with a pickup, last 30 days</th>         <th>Last pickup</th><th>Last drop-off</th></tr>",
+    );
+    let when = |ms: Option<i64>| ms.map_or("never".to_string(), short_time);
+    for call in calls {
+        let theirs: Vec<&trips::Trip> = all.iter().filter(|t| t.courier == call).collect();
+        let due: usize = theirs
+            .iter()
+            .map(|t| {
+                // only departures since the trip was registered can have been missed
+                let from = (now - MONTH).max(t.ts);
+                t.runs(from, now)
+                    .into_iter()
+                    .filter(|d| *d >= from && *d <= now)
+                    .count()
+            })
+            .sum();
+        let s = seen.iter().find(|s| s.call == call);
+        let _ = write!(
+            b,
+            "<tr><td>{}</td><td class=n>{}</td><td class=n>{due}</td><td class=n>{}</td><td>{}</td><td>{}</td></tr>",
+            esc(call),
+            theirs.len(),
+            s.map_or(0, |s| s.drive_days),
+            when(s.and_then(|s| s.last_pickup)),
+            when(s.and_then(|s| s.last_dropoff))
+        );
+    }
+    b.push_str(
+        "</table></div><p class=\"mute small\">Departures due counts this courier's registered departures since each trip was registered; a day with a pickup is one on which a pinned car logged a pickup naming this callsign as control operator.</p>",
+    );
+    b
+}
+
 pub fn trips_page_body(app: &App, now: i64, error: Option<&str>) -> anyhow::Result<String> {
     let all = trips::trips(&app.db())?;
     let me = app.whoami_cached().map(|w| w.key);
@@ -868,6 +919,8 @@ pub fn trips_page_body(app: &App, now: i64, error: Option<&str>) -> anyhow::Resu
         let _ = write!(b, "<div class=banner>{}</div>", esc(e));
     }
     b.push_str(&trips_table(&all, me.as_deref(), now));
+    let seen = mule::couriers(&app.db(), now - MONTH)?;
+    b.push_str(&couriers_table(&all, &seen, now));
     if app.send_key.is_none() {
         b.push_str("<p class=mute>Registering trips from this page is off because this site has no send key.</p>");
         return Ok(b);
@@ -986,11 +1039,12 @@ pub fn manifest_body(
         } => (
             trip.capacity_bytes(),
             format!(
-                "{} to {}, {} on {} ({}){}",
+                "{} to {}, {} on {}, arriving about {} ({}){}",
                 esc(&trip.from),
                 esc(&trip.to),
                 esc(&trip.courier),
                 short_time(*depart_ms),
+                short_time(depart_ms + trip.length_ms()),
                 if *depart_ms <= now {
                     "on the road"
                 } else {
@@ -1046,21 +1100,23 @@ pub fn manifest_body(
     );
     if !carried.is_empty() {
         b.push_str("<h2>Aboard until the destination receipts it</h2>");
-        b.push_str(&rows(carried, None, now));
+        b.push_str(&rows(carried, Some(&m.plan), now));
         b.push_str("<h2>Still to load for this drive</h2>");
     }
-    b.push_str(&cargo_rows(
-        &m.plan,
-        &m.load,
-        &|i| {
-            if loaded(i) {
-                "aboard".into()
-            } else {
-                "loading".into()
-            }
-        },
-        now,
-    ));
+    if !m.load.is_empty() {
+        b.push_str(&cargo_rows(
+            &m.plan,
+            &m.load,
+            &|i| {
+                if loaded(i) {
+                    "aboard".into()
+                } else {
+                    "loading".into()
+                }
+            },
+            now,
+        ));
+    }
     b.push_str(
         "<h2>Change the drive</h2><form class=send method=post action=\"/drive\" enctype=\"multipart/form-data\">\
          <label>Drive<select name=drive><option value=auto>my next registered trip (automatic)</option>\
@@ -1191,6 +1247,80 @@ mod tests {
     }
 
     #[test]
+    fn couriers_show_what_they_registered_next_to_what_was_seen() {
+        const FRI: i64 = 1_795_132_800_000;
+        const DAY: i64 = 86_400_000;
+        let t = trips::Trip {
+            author: "ab".repeat(32),
+            author_call: "N0AAA".into(),
+            id: "fri".into(),
+            courier: "N0DRV".into(),
+            from: "north".into(),
+            to: "south".into(),
+            days: trips::parse_days("fri").unwrap(),
+            depart_min: 17 * 60,
+            hours: 3.0,
+            capacity_mb: 10,
+            note: String::new(),
+            ts: 0,
+        };
+        let seen = [mule::Seen {
+            call: "N0XYZ".into(),
+            last_pickup: Some(FRI),
+            last_dropoff: None,
+            drive_days: 2,
+        }];
+        let b = couriers_table(std::slice::from_ref(&t), &seen, FRI + 28 * DAY);
+        assert!(
+            b.contains(
+                "<td>N0DRV</td><td class=n>1</td><td class=n>4</td><td class=n>0</td><td>never</td>"
+            ),
+            "{b}"
+        );
+        assert!(b.contains("<td>N0XYZ</td><td class=n>0</td><td class=n>0</td><td class=n>2</td>"));
+        let fresh = trips::Trip {
+            ts: FRI + 20 * DAY,
+            ..t
+        };
+        let b = couriers_table(&[fresh], &[], FRI + 28 * DAY);
+        assert!(
+            b.contains("<td>N0DRV</td><td class=n>1</td><td class=n>1</td>"),
+            "only the Friday since it was registered: {b}"
+        );
+    }
+
+    #[test]
+    fn in_transit_rows_say_when_to_expect_the_load() {
+        let mut s = Sites::default();
+        let id = s.msg("urgent", "south", 0);
+        let t = trips::Trip {
+            author: crate::mule::testing::key("n0north"),
+            author_call: "N0NORTH".into(),
+            id: "daily".into(),
+            courier: "N0DRV".into(),
+            from: "north".into(),
+            to: "south".into(),
+            days: 0x7f,
+            depart_min: 60,
+            hours: 2.0,
+            capacity_mb: 10,
+            note: String::new(),
+            ts: 0,
+        };
+        let key = t.key();
+        s.add(
+            "n0car",
+            "mule.pickup",
+            json!({"msg": id, "operator": "N0DRV", "trip": key}),
+            30 * 60_000,
+        );
+        let plan = crate::plan::plan(vec![], &[t], 0);
+        let v = s.one(&id);
+        assert!(trip(&v, Some(&plan), 0).contains("expected at south about 1970-01-01 03:00 UTC"));
+        assert!(trip(&v, Some(&plan), 4 * 3_600_000).contains("overdue"));
+    }
+
+    #[test]
     fn the_page_sorts_messages_by_where_they_are() {
         let mut s = Sites::default();
         let a = s.msg("urgent", "south", 0);
@@ -1240,9 +1370,9 @@ mod tests {
             receipts: vec![],
             bundle: None,
             mine: false,
-            plan: None,
+            status: String::new(),
         };
-        let page = body(&s, 0) + &msg_body(&v[0], &l, 0);
+        let page = body(&s, 0) + &msg_body(&v[0], &l);
         assert!(!page.contains("<script>") && !page.contains("<b>x"));
         assert!(page.contains("&lt;script&gt;"));
     }
@@ -1280,9 +1410,9 @@ mod tests {
             receipts: mule::receipts(&s.conn, &id).unwrap(),
             bundle: None,
             mine: true,
-            plan: None,
+            status: String::new(),
         };
-        let b = msg_body(&s.one(&id), &l, 200_000);
+        let b = msg_body(&s.one(&id), &l);
         assert!(b.contains("picked up by car N0CAR, control operator N0DRV, trip abcd1234:fri"));
         assert!(b.contains("handed to south by car N0CAR, control operator N0DRV"));
         assert!(b.contains("receipt for south signed by N0SOUTH<"));

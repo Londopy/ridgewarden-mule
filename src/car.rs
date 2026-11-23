@@ -162,7 +162,17 @@ pub async fn round(app: &App) -> Result<()> {
     if let Err(e) = pick_up(app, &views, &m, &me.key).await {
         tracing::warn!("logging pickups: {e:#}");
     }
-    drop_off(app, &views, &me.key).await
+    // a receipt can come back within the same sync as the files, before this car has
+    // logged its drop-off; the hand-over still belongs in the record
+    let mut handed = views;
+    handed.extend(crate::mule::list(
+        &app.db(),
+        app.cfg.third_party,
+        &[crate::mule::State::Delivered],
+        200,
+        0,
+    )?);
+    drop_off(app, &handed, &me.key).await
 }
 
 /// The first characters of a key or id, for log lines; whatever a peer sends.
@@ -451,6 +461,50 @@ cores = [\"{}\"]",
             car.state.lock().unwrap().wants.len(),
             1,
             "what is aboard still takes up room"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_drop_off_is_logged_even_when_the_receipt_got_back_first() {
+        let d = tempfile::tempdir().unwrap();
+        let car = FakeCore::start("n0car", d.path()).await;
+        let south = FakeCore::start("n0south", d.path()).await;
+        let north = author("n0north");
+        let text = text_msg(&north, 1, "urgent", now_ms());
+        car.add(text.clone());
+        let cfg = format!(
+            "operator = \"N0DRV\"
+[car]
+[[islands]]
+name = \"north\"
+keys = [\"{}\"]
+             [[islands]]
+name = \"south\"
+keys = [\"{}\"]
+cores = [\"{}\"]",
+            north.key,
+            south.key(),
+            south.url
+        );
+        let app = crate::testing::app(d.path(), &car, &cfg);
+        step(&app).await;
+        assert_eq!(car.state.lock().unwrap().appended("mule.pickup").len(), 1);
+        south.add(text.clone());
+        car.add(event(
+            &crate::testing::author("n0south"),
+            1,
+            "mule.receipt",
+            json!({"msg": text.id, "island": "south"}),
+            now_ms(),
+        ));
+        step(&app).await;
+        let drops = car.state.lock().unwrap().appended("mule.dropoff").len();
+        assert_eq!(drops, 1);
+        step(&app).await;
+        assert_eq!(
+            car.state.lock().unwrap().appended("mule.dropoff").len(),
+            1,
+            "once"
         );
     }
 

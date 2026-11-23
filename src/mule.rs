@@ -831,6 +831,37 @@ pub fn corridors(conn: &Connection, third_party: bool) -> Result<Vec<Corridor>> 
         .collect())
 }
 
+/// A courier as the cars' records show them.
+#[derive(Debug, PartialEq, Default)]
+pub struct Seen {
+    pub call: String,
+    pub last_pickup: Option<i64>,
+    pub last_dropoff: Option<i64>,
+    /// days since `since_ms` on which they picked anything up
+    pub drive_days: usize,
+}
+
+/// Every control operator in the pinned cars' pickups and drop-offs.
+pub fn couriers(conn: &Connection, since_ms: i64) -> Result<Vec<Seen>> {
+    let mut st = conn.prepare(
+        "SELECT h.operator,
+                max(CASE WHEN h.kind = 'pickup' THEN h.ms END),
+                max(CASE WHEN h.kind = 'dropoff' THEN h.ms END),
+                count(DISTINCT CASE WHEN h.kind = 'pickup' AND h.ms >= ?1 THEN h.ms / 86400000 END)
+         FROM hops h JOIN cars c ON c.key = h.car
+         GROUP BY h.operator ORDER BY h.operator",
+    )?;
+    let rows = st.query_map(params![since_ms], |r| {
+        Ok(Seen {
+            call: r.get(0)?,
+            last_pickup: r.get(1)?,
+            last_dropoff: r.get(2)?,
+            drive_days: r.get::<_, i64>(3)? as usize,
+        })
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 /// Island names seen in messages and pins, for the send form's suggestions.
 pub fn islands(conn: &Connection) -> Result<Vec<String>> {
     Ok(conn
@@ -1193,6 +1224,46 @@ mod tests {
             "only the pinned sender's message"
         );
         assert_eq!(to_pick_up(&v, &key("n0car")).len(), 1);
+    }
+
+    #[test]
+    fn couriers_are_seen_through_their_cars_records() {
+        let mut s = Sites::default();
+        const DAY: i64 = 86_400_000;
+        for (day, op) in [(1, "N0DRV"), (1, "N0DRV"), (3, "N0DRV"), (2, "N0XYZ")] {
+            let id = s.msg("urgent", "south", day * DAY);
+            s.add(
+                "n0car",
+                "mule.pickup",
+                json!({"msg": id, "operator": op}),
+                day * DAY + 1,
+            );
+        }
+        let id = s.msg("urgent", "south", 0);
+        s.add(
+            "n0car",
+            "mule.dropoff",
+            json!({"msg": id, "operator": "N0DRV", "island": "south"}),
+            4 * DAY,
+        );
+        s.add(
+            "n0rogue",
+            "mule.pickup",
+            json!({"msg": id, "operator": "N0FAKE"}),
+            5 * DAY,
+        );
+        let c = couriers(&s.conn, 2 * DAY).unwrap();
+        assert_eq!(c.len(), 2, "only pinned cars' records");
+        assert_eq!(
+            c[0],
+            Seen {
+                call: "N0DRV".into(),
+                last_pickup: Some(3 * DAY + 1),
+                last_dropoff: Some(4 * DAY),
+                drive_days: 1,
+            }
+        );
+        assert_eq!((c[1].call.as_str(), c[1].drive_days), ("N0XYZ", 1));
     }
 
     #[test]

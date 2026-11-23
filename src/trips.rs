@@ -269,6 +269,14 @@ impl Projection for Trips {
     }
 }
 
+/// When a load picked up for trip `key` at `after_ms` should reach the far island: the end
+/// of that trip's drive under way then, or of its next one.
+pub fn arrival(trips: &[Trip], key: &str, after_ms: i64) -> Option<i64> {
+    let t = trips.iter().find(|t| t.key() == key)?;
+    let dep = t.runs(after_ms, after_ms + 8 * DAY).into_iter().next()?;
+    Some(dep + t.length_ms())
+}
+
 /// Every trip on the plan, by corridor.
 pub fn trips(conn: &Connection) -> Result<Vec<Trip>> {
     let mut st = conn.prepare(
@@ -340,6 +348,29 @@ mod tests {
         assert_eq!(t.runs(FRI + 19 * H, FRI + 20 * H), [FRI + 17 * H + H / 2]);
         // at 21:00 it has arrived
         assert!(t.runs(FRI + 21 * H, FRI + 22 * H).is_empty());
+    }
+
+    #[test]
+    fn arrival_is_the_end_of_the_drive_the_load_went_with() {
+        let t = [trip("fri", "17:30", 3.0)];
+        let key = t[0].key();
+        let fri_run_ends = FRI + 20 * H + H / 2;
+        assert_eq!(
+            arrival(&t, &key, FRI + 9 * H),
+            Some(fri_run_ends),
+            "loaded before it left"
+        );
+        assert_eq!(
+            arrival(&t, &key, FRI + 19 * H),
+            Some(fri_run_ends),
+            "on the road"
+        );
+        assert_eq!(
+            arrival(&t, &key, FRI + 21 * H),
+            Some(fri_run_ends + 7 * 24 * H),
+            "next week's"
+        );
+        assert_eq!(arrival(&t, "nobody:x", FRI), None);
     }
 
     #[test]
