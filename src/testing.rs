@@ -61,6 +61,8 @@ pub struct Core {
     /// files published with blob/add: name, size and BLAKE3 of the content
     pub added: Vec<(String, u64, String)>,
     pub export_dir: PathBuf,
+    /// answer blob lookups with a 503, like a core that is restarting
+    pub broken: bool,
     seq: u64,
 }
 
@@ -78,6 +80,8 @@ impl Core {
 pub struct FakeCore {
     pub url: String,
     pub state: Arc<Mutex<Core>>,
+    /// shuts the server, as a core that is stopped closes its port
+    stop: Arc<tokio::sync::Notify>,
 }
 
 type S = State<Arc<Mutex<Core>>>;
@@ -130,7 +134,11 @@ struct BlobsQ {
 }
 
 async fn blob(State(s): S, Query(q): Query<BlobsQ>) -> Response {
-    match s.lock().unwrap().blobs.get(&q.root) {
+    let s = s.lock().unwrap();
+    if s.broken {
+        return (StatusCode::SERVICE_UNAVAILABLE, "restarting").into_response();
+    }
+    match s.blobs.get(&q.root) {
         Some(b) => Json(b.clone()).into_response(),
         None => (StatusCode::NOT_FOUND, "no manifest for that blob").into_response(),
     }
@@ -226,8 +234,30 @@ impl FakeCore {
             .with_state(state.clone());
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
-        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
-        FakeCore { url, state }
+        let stop = Arc::new(tokio::sync::Notify::new());
+        let quit = stop.clone();
+        tokio::spawn(async move {
+            axum::serve(l, app)
+                .with_graceful_shutdown(async move { quit.notified().await })
+                .await
+                .unwrap()
+        });
+        FakeCore { url, state, stop }
+    }
+
+    /// The address of a core that isn't running: nothing listens there.
+    pub fn closed() -> FakeCore {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        FakeCore {
+            url: format!("http://{}", l.local_addr().unwrap()),
+            state: Default::default(),
+            stop: Default::default(),
+        }
+    }
+
+    /// Stop answering for good, the way a core that was shut down does.
+    pub fn stop(&self) {
+        self.stop.notify_one();
     }
 
     pub fn key(&self) -> String {

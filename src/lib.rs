@@ -6,6 +6,7 @@
 //! records each pickup and drop-off on the car, saves files and signs receipts at the
 //! destination, and shows how long the trip really takes.
 
+pub mod api;
 pub mod app;
 pub mod bpv7;
 pub mod car;
@@ -19,6 +20,7 @@ pub mod mule;
 pub mod multipart;
 pub mod plan;
 pub mod send;
+pub mod top;
 pub mod trips;
 pub mod web;
 
@@ -29,7 +31,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 async fn round(app: Arc<app::App>) -> anyhow::Result<()> {
-    ridgewarden_client::follow(&app.core, &app.db, app::PROJECTIONS).await?;
+    let now = ridgewarden_client::util::now_ms();
+    if let Err(e) = ridgewarden_client::follow(&app.core, &app.db, app::PROJECTIONS).await {
+        let full = format!("{e:#}");
+        app.read_core(Some(app::short_err(e)), now);
+        anyhow::bail!(full);
+    }
+    app.read_core(None, now);
     let Some(island) = &app.cfg.island else {
         return car::round(&app).await;
     };

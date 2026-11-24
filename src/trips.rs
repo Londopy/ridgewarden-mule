@@ -14,9 +14,11 @@ use ridgewarden_client::util::valid_node;
 use rusqlite::{Connection, Transaction, params};
 use serde_json::{Value, json};
 
-use crate::mule::{call, field, island};
+use crate::mule::{Seen, call, field, island};
 
 const DAY: i64 = 86_400_000;
+/// How far back the couriers' counts look.
+pub const MONTH: i64 = 30 * DAY;
 const DAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 /// Ten terabytes: more than any car carries, small enough that nothing overflows.
 const MAX_CAPACITY_MB: u64 = 10_000_000;
@@ -119,6 +121,23 @@ impl Trip {
             day += 1;
         }
         out
+    }
+
+    /// The next departure within the plan's two weeks.
+    pub fn next(&self, now: i64) -> Option<i64> {
+        self.runs(now, now + crate::plan::HORIZON_MS)
+            .into_iter()
+            .find(|d| *d >= now)
+    }
+
+    /// Departures in the last 30 days, counted from when it was registered, since only
+    /// those can have been missed.
+    pub fn due(&self, now: i64) -> usize {
+        let from = (now - MONTH).max(self.ts);
+        self.runs(from, now)
+            .into_iter()
+            .filter(|d| *d >= from && *d <= now)
+            .count()
     }
 
     pub fn days_text(&self) -> String {
@@ -275,6 +294,38 @@ pub fn arrival(trips: &[Trip], key: &str, after_ms: i64) -> Option<i64> {
     let t = trips.iter().find(|t| t.key() == key)?;
     let dep = t.runs(after_ms, after_ms + 8 * DAY).into_iter().next()?;
     Some(dep + t.length_ms())
+}
+
+/// A courier: the trips they registered next to what the pinned cars' records show.
+pub struct Courier<'a> {
+    pub call: &'a str,
+    pub trips: Vec<&'a Trip>,
+    /// their registered departures due in the last 30 days
+    pub due: usize,
+    pub seen: Option<&'a Seen>,
+}
+
+/// Everyone who registered a trip or drove as control operator, by callsign.
+pub fn couriers<'a>(all: &'a [Trip], seen: &'a [Seen], now: i64) -> Vec<Courier<'a>> {
+    let mut calls: Vec<&str> = all
+        .iter()
+        .map(|t| t.courier.as_str())
+        .chain(seen.iter().map(|s| s.call.as_str()))
+        .collect();
+    calls.sort();
+    calls.dedup();
+    calls
+        .into_iter()
+        .map(|call| {
+            let trips: Vec<&Trip> = all.iter().filter(|t| t.courier == call).collect();
+            Courier {
+                call,
+                due: trips.iter().map(|t| t.due(now)).sum(),
+                trips,
+                seen: seen.iter().find(|s| s.call == call),
+            }
+        })
+        .collect()
 }
 
 /// Every trip on the plan, by corridor.

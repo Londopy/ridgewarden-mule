@@ -1,0 +1,503 @@
+{
+ "now_ms": 1795478497916,
+ "island": "north",
+ "operator": "N0AAA",
+ "call": "N0AAA",
+ "core_error": null,
+ "waiting": 4,
+ "moving": 2,
+ "delivered": 4,
+ "messages": [
+  {
+   "id": "5f09deb8749cce97aecb92259e35f2ef3b4eb29cd77dfa324f0531fa36e2b600",
+   "class": "routine",
+   "state": "waiting",
+   "from_island": "north",
+   "from": "N0AAA",
+   "to": "south",
+   "to_call": "N0BBB",
+   "signed_by": "N0AAA",
+   "on_behalf": null,
+   "text": "Radio check for the south net: please reply with your signal report.",
+   "file": null,
+   "library": false,
+   "sent_ms": 1795478473478,
+   "pickups": [],
+   "dropoffs": [],
+   "receipt": null,
+   "expected_ms": null
+  },
+  {
+   "id": "602e4585df2f78e3cf76d0bfb16edc234875d0fabe4e77125f571ae300782a96",
+   "class": "routine",
+   "state": "waiting",
+   "from_island": "north",
+   "from": "N0AAA",
+   "to": "east",
+   "to_call": null,
+   "signed_by": "N0AAA",
+   "on_behalf": null,
+   "text": "Is the east repeater back on the air? We can't reach it from here.",
+   "file": null,
+   "library": false,
+   "sent_ms": 1795478477839,
+   "pickups": [],
+   "dropoffs": [],
+   "receipt": null,
+   "expected_ms": null
+  },
+  {
+   "id": "4f08431a8d2e8e329cbc97438717b218d025ab2af77adff62ccd207cf8079a82",
+   "class": "bulk",
+   "state": "waiting",
+   "from_island": "north",
+   "from": "N0AAA",
+   "to": "south",
+   "to_call": null,
+   "signed_by": "N0AAA",
+   "on_behalf": null,
+   "text": "Updated map tiles for the valley",
+   "file": {
+    "root": "a6ceee36c1da823576f5a2f7fa85ff82996a6c5cedab2019855300d64c5daaac",
+    "name": "valley-tiles.pmtiles",
+    "size": 2621500
+   },
+   "library": false,
+   "sent_ms": 1795478473563,
+   "pickups": [],
+   "dropoffs": [],
+   "receipt": null,
+   "expected_ms": null
+  },
+  {
+   "id": "1850880420f624022b539c02a482935dc3a2edf07e5b5ad6c34918514feaee60",
+   "class": "bulk",
+   "state": "waiting",
+   "from_island": "north",
+   "from": "N0AAA",
+   "to": "south",
+   "to_call": null,
+   "signed_by": "N0AAA",
+   "on_behalf": null,
+   "text": "Offline library update: regional maps 2026-12.",
+   "file": {
+    "root": "e887915c9cfc85f19cb6dedc6c1d7aed7188bbd996f0324ac56c7889c528b8de",
+    "name": "maps_2026-12.pmtiles",
+    "size": 3000000
+   },
+   "library": true,
+   "sent_ms": 1795478473764,
+   "pickups": [],
+   "dropoffs": [],
+   "receipt": null,
+   "expected_ms": null
+  },
+  {
+   "id": "88f44408fae88ff8848f335a38c7f4fc46787fa24a357c386bc6eae57496965b",
+   "class": "routine",
+   "state": "in_transit",
+   "from_island": "north",
+   "from": "N0AAA",
+   "to": "south",
+   "to_call": null,
+   "signed_by": "N0AAA",
+   "on_behalf": null,
+   "text": "Generator at the fire station needs a fuel run before Friday.",
+   "file": null,
+   "library": false,
+   "sent_ms": 1795477947360,
+   "pickups": [
+    {
+     "car": "82bb1768528093b3f2f48882ee2914624afdf37e132a4c4880c888d6b9ce6ed7",
+     "car_call": "N0CAR",
+     "operator": "N0DRV",
+     "island": null,
+     "trip": "44fd18b5:first-south",
+     "ms": 1795477954456
+    }
+   ],
+   "dropoffs": [],
+   "receipt": null,
+   "expected_ms": 1795478040000
+  },
+  {
+   "id": "d718bba3f9cd1875d63106d33241977a09ea66c1e906e9b8706e9c19f4874367",
+   "class": "routine",
+   "state": "in_transit",
+   "from_island": "north",
+   "from": "N0AAA",
+   "to": "south",
+   "to_call": "N0BBB",
+   "signed_by": "N0AAA",
+   "on_behalf": null,
+   "text": "Shelter roster for the county EOC, as of this afternoon.",
+   "file": {
+    "root": "0f20b09c24fde9d608cf0b6deebc0157cf654bd99134847ade32fd153284e382",
+    "name": "shelter-roster.csv",
+    "size": 1200000
+   },
+   "library": false,
+   "sent_ms": 1795478226826,
+   "pickups": [
+    {
+     "car": "82bb1768528093b3f2f48882ee2914624afdf37e132a4c4880c888d6b9ce6ed7",
+     "car_call": "N0CAR",
+     "operator": "N0DRV",
+     "island": null,
+     "trip": "44fd18b5:evening-south",
+     "ms": 1795478450028
+    }
+   ],
+   "dropoffs": [],
+   "receipt": null,
+   "expected_ms": 1795484820000
+  },
+  {
+   "id": "1e1edf867ce00e19354291f8c0ccc3700a9b07d3fa811a8b3f96739aacf89cfc",
+   "class": "bulk",
+   "state": "delivered",
+   "from_island": "north",
+   "from": "N0AAA",
+   "to": "south",
+   "to_call": null,
+   "signed_by": "N0AAA",
+   "on_behalf": null,
+   "text": "Map tiles for the north valley",
+   "file": {
+    "root": "0b3195e114a51a6c565d5b4a539e73e87d4b7e754e2c3debd3205aec89ea2136",
+    "name": "north-tiles.pmtiles",
+    "size": 2621500
+   },
+   "library": false,
+   "sent_ms": 1795477697039,
+   "pickups": [
+    {
+     "car": "82bb1768528093b3f2f48882ee2914624afdf37e132a4c4880c888d6b9ce6ed7",
+     "car_call": "N0CAR",
+     "operator": "N0DRV",
+     "island": null,
+     "trip": "44fd18b5:first-south",
+     "ms": 1795477774201
+    }
+   ],
+   "dropoffs": [
+    {
+     "car": "82bb1768528093b3f2f48882ee2914624afdf37e132a4c4880c888d6b9ce6ed7",
+     "car_call": "N0CAR",
+     "operator": "N0DRV",
+     "island": "south",
+     "trip": null,
+     "ms": 1795477894357
+    }
+   ],
+   "receipt": {
+    "site_call": "N0BBB",
+    "island": "south",
+    "ms": 1795477909370
+   },
+   "expected_ms": null
+  },
+  {
+   "id": "17ed134e4d26b18dab1d58a95bc09cba28749c9be74b4a89c87cf06cca20e3d3",
+   "class": "bulk",
+   "state": "delivered",
+   "from_island": "north",
+   "from": "N0AAA",
+   "to": "south",
+   "to_call": null,
+   "signed_by": "N0AAA",
+   "on_behalf": null,
+   "text": "Offline library update: regional maps 2026-11.",
+   "file": {
+    "root": "7e83456863dad4b378c9e469cf33cf8bd019a5f7aa75b0f893a2d8e4673e089d",
+    "name": "maps_2026-11.pmtiles",
+    "size": 3000000
+   },
+   "library": true,
+   "sent_ms": 1795477697218,
+   "pickups": [
+    {
+     "car": "82bb1768528093b3f2f48882ee2914624afdf37e132a4c4880c888d6b9ce6ed7",
+     "car_call": "N0CAR",
+     "operator": "N0DRV",
+     "island": null,
+     "trip": "44fd18b5:first-south",
+     "ms": 1795477804236
+    }
+   ],
+   "dropoffs": [
+    {
+     "car": "82bb1768528093b3f2f48882ee2914624afdf37e132a4c4880c888d6b9ce6ed7",
+     "car_call": "N0CAR",
+     "operator": "N0DRV",
+     "island": "south",
+     "trip": null,
+     "ms": 1795477894360
+    }
+   ],
+   "receipt": {
+    "site_call": "N0BBB",
+    "island": "south",
+    "ms": 1795477894276
+   },
+   "expected_ms": null
+  },
+  {
+   "id": "298d8eb02b498e1991db5f1d2f6ead910fa982b18447162c35f8d1908888de7b",
+   "class": "bulk",
+   "state": "delivered",
+   "from_island": "north",
+   "from": "N0AAA",
+   "to": "south",
+   "to_call": null,
+   "signed_by": "N0AAA",
+   "on_behalf": null,
+   "text": "Shelter floor plan for the volunteers arriving Saturday.",
+   "file": {
+    "root": "d7c4167b4373a185cdb9f7c877ca387d398478549e67099850de3cbdbed93ab4",
+    "name": "floor-plan.pdf",
+    "size": 1500000
+   },
+   "library": false,
+   "sent_ms": 1795477696946,
+   "pickups": [
+    {
+     "car": "82bb1768528093b3f2f48882ee2914624afdf37e132a4c4880c888d6b9ce6ed7",
+     "car_call": "N0CAR",
+     "operator": "N0DRV",
+     "island": null,
+     "trip": "44fd18b5:first-south",
+     "ms": 1795477759184
+    }
+   ],
+   "dropoffs": [
+    {
+     "car": "82bb1768528093b3f2f48882ee2914624afdf37e132a4c4880c888d6b9ce6ed7",
+     "car_call": "N0CAR",
+     "operator": "N0DRV",
+     "island": "south",
+     "trip": null,
+     "ms": 1795477894353
+    }
+   ],
+   "receipt": {
+    "site_call": "N0BBB",
+    "island": "south",
+    "ms": 1795477894272
+   },
+   "expected_ms": null
+  },
+  {
+   "id": "c267a036a15400254258e59d3500178bc868e58ea1c1ac96b1e644519eb1f3fe",
+   "class": "urgent",
+   "state": "delivered",
+   "from_island": "north",
+   "from": "N0AAA",
+   "to": "south",
+   "to_call": "N0BBB",
+   "signed_by": "N0AAA",
+   "on_behalf": null,
+   "text": "Shelter at the high school needs 20 cots and water by tomorrow.",
+   "file": null,
+   "library": false,
+   "sent_ms": 1795477692797,
+   "pickups": [
+    {
+     "car": "82bb1768528093b3f2f48882ee2914624afdf37e132a4c4880c888d6b9ce6ed7",
+     "car_call": "N0CAR",
+     "operator": "N0DRV",
+     "island": null,
+     "trip": "44fd18b5:first-south",
+     "ms": 1795477699066
+    }
+   ],
+   "dropoffs": [
+    {
+     "car": "82bb1768528093b3f2f48882ee2914624afdf37e132a4c4880c888d6b9ce6ed7",
+     "car_call": "N0CAR",
+     "operator": "N0DRV",
+     "island": "south",
+     "trip": null,
+     "ms": 1795477834282
+    }
+   ],
+   "receipt": {
+    "site_call": "N0BBB",
+    "island": "south",
+    "ms": 1795477834184
+   },
+   "expected_ms": null
+  }
+ ],
+ "unpinned": [
+  "east"
+ ],
+ "departures": [
+  {
+   "trip": "44fd18b5:evening-south",
+   "name": "evening-south",
+   "courier": "N0DRV",
+   "from": "north",
+   "to": "south",
+   "depart_ms": 1795479420000,
+   "arrives_ms": 1795484820000,
+   "capacity": 5000000,
+   "items": 2,
+   "bytes": 2621500,
+   "load": [
+    {
+     "msg": "5f09deb8749cce97aecb92259e35f2ef3b4eb29cd77dfa324f0531fa36e2b600",
+     "author": "44fd18b580c2f7bea79e881e3c99d357a1319c1ec9b9a0ca0d20394848cc621b",
+     "label": "Radio check for the south net: please reply with your signal",
+     "from": "north",
+     "to": "south",
+     "class": "routine",
+     "since_ms": 1795478473478,
+     "bytes": 0,
+     "root": null,
+     "library": false
+    },
+    {
+     "msg": "4f08431a8d2e8e329cbc97438717b218d025ab2af77adff62ccd207cf8079a82",
+     "author": "44fd18b580c2f7bea79e881e3c99d357a1319c1ec9b9a0ca0d20394848cc621b",
+     "label": "Updated map tiles for the valley [valley-tiles.pmtiles]",
+     "from": "north",
+     "to": "south",
+     "class": "bulk",
+     "since_ms": 1795478473563,
+     "bytes": 2621500,
+     "root": "a6ceee36c1da823576f5a2f7fa85ff82996a6c5cedab2019855300d64c5daaac",
+     "library": false
+    }
+   ]
+  },
+  {
+   "trip": "44fd18b5:first-south",
+   "name": "first-south",
+   "courier": "N0DRV",
+   "from": "north",
+   "to": "south",
+   "depart_ms": 1795564260000,
+   "arrives_ms": 1795564440000,
+   "capacity": 50000000,
+   "items": 1,
+   "bytes": 3000000,
+   "load": [
+    {
+     "msg": "1850880420f624022b539c02a482935dc3a2edf07e5b5ad6c34918514feaee60",
+     "author": "44fd18b580c2f7bea79e881e3c99d357a1319c1ec9b9a0ca0d20394848cc621b",
+     "label": "Offline library update: regional maps 2026-12. [maps_2026-12.pmtiles]",
+     "from": "north",
+     "to": "south",
+     "class": "bulk",
+     "since_ms": 1795478473764,
+     "bytes": 3000000,
+     "root": "e887915c9cfc85f19cb6dedc6c1d7aed7188bbd996f0324ac56c7889c528b8de",
+     "library": true
+    }
+   ]
+  },
+  {
+   "trip": "44fd18b5:relay-south",
+   "name": "relay-south",
+   "courier": "N0DRV",
+   "from": "north",
+   "to": "south",
+   "depart_ms": 1795564260000,
+   "arrives_ms": 1795564620000,
+   "capacity": 50000000,
+   "items": 0,
+   "bytes": 0,
+   "load": []
+  },
+  {
+   "trip": "44fd18b5:sat-south",
+   "name": "sat-south",
+   "courier": "N0XYZ",
+   "from": "north",
+   "to": "south",
+   "depart_ms": 1795878000000,
+   "arrives_ms": 1795888800000,
+   "capacity": 20000000000,
+   "items": 0,
+   "bytes": 0,
+   "load": []
+  }
+ ],
+ "unplanned": [
+  {
+   "msg": "602e4585df2f78e3cf76d0bfb16edc234875d0fabe4e77125f571ae300782a96",
+   "author": "44fd18b580c2f7bea79e881e3c99d357a1319c1ec9b9a0ca0d20394848cc621b",
+   "label": "Is the east repeater back on the air? We can't reach it from",
+   "from": "north",
+   "to": "east",
+   "class": "routine",
+   "since_ms": 1795478477839,
+   "bytes": 0,
+   "root": null,
+   "library": false,
+   "why": "no_trip"
+  }
+ ],
+ "manifest": null,
+ "couriers": [
+  {
+   "call": "N0DRV",
+   "trips": [
+    {
+     "name": "evening-south",
+     "from": "north",
+     "to": "south",
+     "schedule": "daily at 00:17 UTC, about 1.5 h",
+     "next_ms": 1795479420000,
+     "capacity": 5000000,
+     "note": "",
+     "by": "N0AAA"
+    },
+    {
+     "name": "first-south",
+     "from": "north",
+     "to": "south",
+     "schedule": "daily at 23:51 UTC, about 0.05 h",
+     "next_ms": 1795564260000,
+     "capacity": 50000000,
+     "note": "parks by the fire station node",
+     "by": "N0AAA"
+    },
+    {
+     "name": "relay-south",
+     "from": "north",
+     "to": "south",
+     "schedule": "daily at 23:51 UTC, about 0.1 h",
+     "next_ms": 1795564260000,
+     "capacity": 50000000,
+     "note": "",
+     "by": "N0AAA"
+    }
+   ],
+   "due": 1,
+   "drive_days": 2,
+   "last_pickup_ms": 1795478450028,
+   "last_dropoff_ms": 1795477894360
+  },
+  {
+   "call": "N0XYZ",
+   "trips": [
+    {
+     "name": "sat-south",
+     "from": "north",
+     "to": "south",
+     "schedule": "Sat at 15:00 UTC, about 3 h",
+     "next_ms": 1795878000000,
+     "capacity": 20000000000,
+     "note": "weekly supply run",
+     "by": "N0AAA"
+    }
+   ],
+   "due": 0,
+   "drive_days": 0,
+   "last_pickup_ms": null,
+   "last_dropoff_ms": null
+  }
+ ]
+}

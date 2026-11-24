@@ -119,6 +119,15 @@ pub fn size_text(n: u64) -> String {
     }
 }
 
+/// A message's file size, or "text" when it has no file.
+pub fn cargo_size(bytes: u64) -> String {
+    if bytes == 0 {
+        "text".into()
+    } else {
+        size_text(bytes)
+    }
+}
+
 pub fn a_call(s: &str) -> bool {
     valid_call(s) && s.bytes().any(|b| b.is_ascii_digit())
 }

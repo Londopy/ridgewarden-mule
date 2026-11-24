@@ -6,13 +6,15 @@
 //! Every site runs the same plan over the same events, so an island sees what will leave
 //! with whom, and a car loads only its own share instead of every file for every island.
 
+use serde::{Deserialize, Serialize};
+
 use crate::mule::{Class, State, View};
 use crate::trips::Trip;
 
 /// How far ahead the plan looks.
 pub const HORIZON_MS: i64 = 14 * 86_400_000;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Cargo {
     pub msg: String,
     /// who signed it, so the car can check the file's manifest against its claim
@@ -44,7 +46,8 @@ impl Run {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Why {
     NoTrip,
     TooBig,
@@ -86,34 +89,37 @@ impl Plan {
     }
 }
 
+/// A message as something to carry.
+pub fn item(v: &View) -> Cargo {
+    let m = &v.msg;
+    let mut label: String = m.text.chars().take(60).collect();
+    if let Some(f) = &m.file {
+        label = if label.is_empty() {
+            f.name.clone()
+        } else {
+            format!("{label} [{}]", f.name)
+        };
+    }
+    Cargo {
+        msg: m.id.clone(),
+        author: m.author.clone(),
+        label,
+        from: m.from_island.clone(),
+        to: m.to_island.clone(),
+        class: m.class,
+        since_ms: m.sent_ms,
+        bytes: m.file.as_ref().map_or(0, |f| f.size),
+        root: m.file.as_ref().map(|f| f.root.clone()),
+        library: m.is_library(),
+    }
+}
+
 /// Waiting messages from senders pinned for their island, ranked.
 pub fn cargo(views: &[View]) -> Vec<Cargo> {
     let mut out: Vec<Cargo> = views
         .iter()
         .filter(|v| v.state == State::Waiting && v.pinned)
-        .map(|v| {
-            let m = &v.msg;
-            let mut label: String = m.text.chars().take(60).collect();
-            if let Some(f) = &m.file {
-                label = if label.is_empty() {
-                    f.name.clone()
-                } else {
-                    format!("{label} [{}]", f.name)
-                };
-            }
-            Cargo {
-                msg: m.id.clone(),
-                author: m.author.clone(),
-                label,
-                from: m.from_island.clone(),
-                to: m.to_island.clone(),
-                class: m.class,
-                since_ms: m.sent_ms,
-                bytes: m.file.as_ref().map_or(0, |f| f.size),
-                root: m.file.as_ref().map(|f| f.root.clone()),
-                library: m.is_library(),
-            }
-        })
+        .map(item)
         .collect();
     out.sort_by_key(|c| (c.class, c.since_ms));
     out

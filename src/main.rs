@@ -12,8 +12,8 @@ use ridgewarden_mule::car::{self, Drive};
 use ridgewarden_mule::config::{Config, EXAMPLE};
 use ridgewarden_mule::mule::Class;
 use ridgewarden_mule::plan::Plan;
-use ridgewarden_mule::send::size_text;
 use ridgewarden_mule::send::{Outgoing, send, stage_file};
+use ridgewarden_mule::send::{cargo_size, size_text};
 use ridgewarden_mule::trips::{self, Trip, parse_days, parse_hhmm};
 use ridgewarden_mule::{spawn_loops, web};
 
@@ -98,16 +98,30 @@ enum Cmd {
     Retire { name: String },
     /// Print the plan, or on a car tonight's manifest
     Manifest,
+    /// Watch the messages, the plan or manifest, and the couriers in a terminal
+    ///
+    /// It reads the page's JSON, so it runs as any user and needs no config.
+    Top {
+        /// this app's page
+        #[arg(long, default_value = "http://127.0.0.1:8800")]
+        url: String,
+        /// seconds between reads
+        #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u64).range(1..=600))]
+        every: u64,
+    },
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ridgewarden_mule=info,ridgewarden_client=info".into()),
-        )
-        .init();
     let cli = Cli::parse();
+    // top draws the whole terminal, so a log line would land in the middle of it
+    if !matches!(cli.cmd, Cmd::Top { .. }) {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "ridgewarden_mule=info,ridgewarden_client=info".into()),
+            )
+            .init();
+    }
     match cli.cmd {
         Cmd::Init => {
             if cli.config.exists() {
@@ -229,6 +243,9 @@ fn main() -> Result<()> {
             let cfg = Config::load(&cli.config)?;
             tokio::runtime::Runtime::new()?.block_on(print_manifest(cfg))
         }
+        Cmd::Top { url, every } => {
+            ridgewarden_mule::top::run(&url, std::time::Duration::from_secs(every))
+        }
     }
 }
 
@@ -274,16 +291,11 @@ async fn print_manifest(cfg: Config) -> Result<()> {
     let now = now_ms();
     let line = |p: &Plan, i: usize| {
         let c = &p.cargo[i];
-        let size = if c.bytes == 0 {
-            "text".to_string()
-        } else {
-            size_text(c.bytes)
-        };
         format!(
             "  {:<8} {:<10} {:>10}  {}",
             c.class.name(),
             c.to,
-            size,
+            cargo_size(c.bytes),
             c.label
         )
     };
@@ -306,12 +318,7 @@ async fn print_manifest(cfg: Config) -> Result<()> {
         if m.load.is_empty() {
             println!("Nothing to take.");
         }
-        for i in &m.load {
-            let c = &m.plan.cargo[*i];
-            let aboard = match &c.root {
-                None => true,
-                Some(r) => app.core.blob_status(r).await?.is_some_and(|b| b.complete),
-            };
+        for (i, aboard) in m.load.iter().zip(car::aboard(&app, &m).await?) {
             println!(
                 "{}  {}",
                 line(&m.plan, *i),

@@ -35,9 +35,10 @@ pub async fn round(app: &App, island: &str) -> Result<()> {
             ),
             Ok(false) => {}
             Err(e) => {
-                let s = note_failure(&app.db(), &v.msg.id, &short_err(&e), now_ms())?;
+                let full = format!("{e:#}");
+                let s = note_failure(&app.db(), &v.msg.id, &short_err(e), now_ms())?;
                 tracing::warn!(
-                    "delivering {} (attempt {}): {e:#}",
+                    "delivering {} (attempt {}): {full}",
                     &v.msg.id[..12],
                     s.attempts
                 );

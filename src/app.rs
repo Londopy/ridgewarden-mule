@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use axum::body::Bytes;
 use ridgewarden_client::core::{Projection, Whoami};
+use ridgewarden_client::util::human_duration;
 use ridgewarden_client::{CoreClient, open_db};
 use rusqlite::Connection;
 use tokio::sync::Semaphore;
@@ -32,6 +34,17 @@ pub struct Address {
 pub struct PostWaits {
     pub before_key: Duration,
     pub idle: Duration,
+}
+
+/// With no good read of the core for this long, what the pages show is out of date.
+const STALE_MS: i64 = 2 * 60_000;
+
+/// How the app's reads of its core's feed have gone: when one last worked, and why the
+/// latest failed, if it did.
+#[derive(Default)]
+struct Reads {
+    ok_ms: Option<i64>,
+    err: Option<String>,
 }
 
 /// This site's own state, never rebuilt from the feed.
@@ -81,7 +94,10 @@ pub struct App {
     pub downloads: Arc<Semaphore>,
     /// whether dtnd has our endpoint registered since this app started
     pub dtnd_registered: AtomicBool,
+    /// the latest /api/mule answer and when it was made, so a burst of readers costs one
+    pub last_json: tokio::sync::Mutex<Option<(Instant, Bytes)>>,
     who: Mutex<Option<Whoami>>,
+    reads: Mutex<Reads>,
 }
 
 impl App {
@@ -127,7 +143,9 @@ impl App {
             forms: Semaphore::new(8),
             downloads: Arc::new(Semaphore::new(DOWNLOADS)),
             dtnd_registered: AtomicBool::new(false),
+            last_json: tokio::sync::Mutex::new(None),
             who: Mutex::new(None),
+            reads: Mutex::new(Reads::default()),
             cfg,
         })
     }
@@ -159,6 +177,36 @@ impl App {
             &self.cfg.car_keys(Some(&me.key)),
         )?;
         Ok(me)
+    }
+
+    /// Note how a read of the core's feed went: None when it worked, else why not.
+    pub fn read_core(&self, failed: Option<String>, now: i64) {
+        let mut reads = self.reads.lock().unwrap_or_else(|e| e.into_inner());
+        if failed.is_none() {
+            reads.ok_ms = Some(now);
+        }
+        reads.err = failed;
+    }
+
+    /// What is wrong with the app's line to its core, as a sentence: the latest read of its
+    /// feed failed, or none has worked for a while. None when all is well, or before the
+    /// first read.
+    pub fn core_trouble(&self, now: i64) -> Option<String> {
+        let reads = self.reads.lock().unwrap_or_else(|e| e.into_inner());
+        match (&reads.err, reads.ok_ms) {
+            (Some(e), Some(t)) => Some(format!(
+                "Can't read the core: {e}. The last good read was {} ago.",
+                human_duration(now - t)
+            )),
+            (Some(e), None) => Some(format!(
+                "Can't read the core: {e}. No read has worked since the app started."
+            )),
+            (None, Some(t)) if now - t > STALE_MS => Some(format!(
+                "The core was last read {} ago.",
+                human_duration(now - t)
+            )),
+            _ => None,
+        }
     }
 
     /// Messages still under way.
@@ -210,14 +258,13 @@ fn write_private(p: &std::path::Path, s: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn short_err(e: &anyhow::Error) -> String {
-    if let Some(r) = e.downcast_ref::<reqwest::Error>() {
-        if r.is_timeout() {
-            return "timed out".into();
-        }
-        if r.is_connect() {
-            return "could not connect".into();
-        }
-    }
+/// A failed request in a few words for pages and logs, without its URL.
+pub fn short_err(e: anyhow::Error) -> String {
+    let e = match e.downcast::<reqwest::Error>() {
+        Ok(r) if r.is_timeout() => return "timed out".into(),
+        Ok(r) if r.is_connect() => return "could not connect".into(),
+        Ok(r) => anyhow::Error::new(r.without_url()),
+        Err(e) => e,
+    };
     format!("{e:#}").chars().take(200).collect()
 }

@@ -4,6 +4,7 @@
 //! signed by the car's core and names the control operator.
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use anyhow::Result;
 use ridgewarden_client::util::now_ms;
@@ -18,6 +19,8 @@ use crate::trips::{Trip, trips};
 
 /// How long before a registered departure the car starts loading for it.
 pub const LOAD_AHEAD_MS: i64 = 18 * 3_600_000;
+/// How long a page waits for the car's core to say what is aboard.
+const ABOARD_WAIT: Duration = Duration::from_secs(3);
 /// A drive the driver picked by hand counts for this long.
 const CHOICE_MS: i64 = 24 * 3_600_000;
 
@@ -151,6 +154,31 @@ pub fn manifest(app: &App, me: &str, now: i64) -> Result<Manifest> {
     })
 }
 
+/// Whether each item of the manifest's load is aboard, in order: text always is, a file
+/// once the car's core holds all of it.
+pub async fn aboard(app: &App, m: &Manifest) -> Result<Vec<bool>> {
+    let ask = async {
+        let mut out = Vec::with_capacity(m.load.len());
+        for i in &m.load {
+            out.push(match &m.plan.cargo[*i].root {
+                None => true,
+                Some(root) => app
+                    .core
+                    .blob_status(root)
+                    .await?
+                    .is_some_and(|b| b.complete),
+            });
+        }
+        anyhow::Ok(out)
+    };
+    tokio::time::timeout(ABOARD_WAIT, ask).await.map_err(|_| {
+        anyhow::anyhow!(
+            "the core took over {} s to say what is aboard",
+            ABOARD_WAIT.as_secs()
+        )
+    })?
+}
+
 /// Each step on its own, so a problem with one file or one island doesn't stop the rest.
 pub async fn round(app: &App) -> Result<()> {
     let me = app.pin().await?;
@@ -274,7 +302,7 @@ async fn drop_off(app: &App, views: &[View], me: &str) -> Result<()> {
             let there = match Remote::connect(url).await {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::debug!("{island} core {url}: {}", short_err(&e));
+                    tracing::debug!("{island} core {url}: {}", short_err(e));
                     continue;
                 }
             };

@@ -13,6 +13,7 @@ use ridgewarden_client::event::valid_call;
 use ridgewarden_client::ui::Color;
 use ridgewarden_client::util::{median, valid_node};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const BLOB_PREFIX: &str = "ridgewarden-mule/";
@@ -20,7 +21,8 @@ pub const BLOB_PREFIX: &str = "ridgewarden-mule/";
 pub const LIBRARY_APP: &str = "ridgewarden-library";
 pub const MAX_TEXT: usize = 4000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Class {
     Urgent,
     Routine,
@@ -73,7 +75,7 @@ impl Class {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileRef {
     pub root: String,
     pub name: String,
@@ -115,7 +117,7 @@ pub struct Relay {
     pub call: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Hop {
     pub car: String,
     pub car_call: String,
@@ -125,14 +127,15 @@ pub struct Hop {
     pub ms: i64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Receipt {
     pub site_call: String,
     pub island: String,
     pub ms: i64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum State {
     Waiting,
     InTransit,

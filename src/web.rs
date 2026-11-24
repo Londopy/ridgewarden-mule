@@ -21,7 +21,7 @@ use crate::config::Config;
 use crate::forms;
 use crate::mule::{self, Class, Corridor, State as Trip, View, is_id};
 use crate::plan::Plan;
-use crate::send::size_text;
+use crate::send::{cargo_size, size_text};
 use crate::trips;
 
 const STYLE: &str = "<style>
@@ -50,6 +50,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/drive", post(forms::drive_post))
         .route("/file", get(file))
         .route("/api/corridors", get(corridors_json))
+        .route("/api/mule", get(crate::api::mule_json))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
 }
@@ -96,7 +97,14 @@ pub async fn page(app: &App, active: &str, title: &str, body: &str, refresh: boo
         who: &who,
         refresh,
     };
-    Html(p.render(title, &format!("{STYLE}{body}")))
+    let trouble = match app.core_trouble(now_ms()) {
+        Some(t) => format!(
+            "<div class=banner>{} What this page shows may be out of date.</div>",
+            esc(&t)
+        ),
+        None => String::new(),
+    };
+    Html(p.render(title, &format!("{STYLE}{trouble}{body}")))
 }
 
 fn state_pill(s: Trip) -> String {
@@ -308,7 +316,7 @@ fn more(s: &Section, state: &str) -> String {
 }
 
 /// Islands that messages here go to but whose receipts can't count, for lack of keys.
-fn unpinned(cfg: &Config, own_key: Option<&str>, views: &[View]) -> Vec<String> {
+pub fn unpinned(cfg: &Config, own_key: Option<&str>, views: &[View]) -> Vec<String> {
     let mut out: Vec<String> = views
         .iter()
         .map(|v| v.msg.to_island.clone())
@@ -827,9 +835,7 @@ fn trips_table(all: &[trips::Trip], me: Option<&str>, now: i64) -> String {
     );
     for t in all {
         let next = t
-            .runs(now, now + crate::plan::HORIZON_MS)
-            .into_iter()
-            .find(|d| *d >= now)
+            .next(now)
             .map_or("not in the next two weeks".into(), short_time);
         let retire = if me == Some(t.author.as_str()) {
             format!(
@@ -858,47 +864,27 @@ fn trips_table(all: &[trips::Trip], me: Option<&str>, now: i64) -> String {
     b
 }
 
-const MONTH: i64 = 30 * 86_400_000;
-
 /// Who has been driving: the cars' records next to what each courier registered, so the
 /// people running the mesh can see which trips really happen.
 pub fn couriers_table(all: &[trips::Trip], seen: &[mule::Seen], now: i64) -> String {
-    let mut calls: Vec<&str> = all
-        .iter()
-        .map(|t| t.courier.as_str())
-        .chain(seen.iter().map(|s| s.call.as_str()))
-        .collect();
-    calls.sort();
-    calls.dedup();
-    if calls.is_empty() {
+    let couriers = trips::couriers(all, seen, now);
+    if couriers.is_empty() {
         return String::new();
     }
     let mut b = String::from(
         "<h2>Couriers</h2><div class=wrap><table><tr><th>Courier</th><th class=n>Trips</th>         <th class=n>Departures due, last 30 days</th><th class=n>Days with a pickup, last 30 days</th>         <th>Last pickup</th><th>Last drop-off</th></tr>",
     );
     let when = |ms: Option<i64>| ms.map_or("never".to_string(), short_time);
-    for call in calls {
-        let theirs: Vec<&trips::Trip> = all.iter().filter(|t| t.courier == call).collect();
-        let due: usize = theirs
-            .iter()
-            .map(|t| {
-                // only departures since the trip was registered can have been missed
-                let from = (now - MONTH).max(t.ts);
-                t.runs(from, now)
-                    .into_iter()
-                    .filter(|d| *d >= from && *d <= now)
-                    .count()
-            })
-            .sum();
-        let s = seen.iter().find(|s| s.call == call);
+    for c in couriers {
         let _ = write!(
             b,
-            "<tr><td>{}</td><td class=n>{}</td><td class=n>{due}</td><td class=n>{}</td><td>{}</td><td>{}</td></tr>",
-            esc(call),
-            theirs.len(),
-            s.map_or(0, |s| s.drive_days),
-            when(s.and_then(|s| s.last_pickup)),
-            when(s.and_then(|s| s.last_dropoff))
+            "<tr><td>{}</td><td class=n>{}</td><td class=n>{}</td><td class=n>{}</td><td>{}</td><td>{}</td></tr>",
+            esc(c.call),
+            c.trips.len(),
+            c.due,
+            c.seen.map_or(0, |s| s.drive_days),
+            when(c.seen.and_then(|s| s.last_pickup)),
+            when(c.seen.and_then(|s| s.last_dropoff))
         );
     }
     b.push_str(
@@ -919,7 +905,7 @@ pub fn trips_page_body(app: &App, now: i64, error: Option<&str>) -> anyhow::Resu
         let _ = write!(b, "<div class=banner>{}</div>", esc(e));
     }
     b.push_str(&trips_table(&all, me.as_deref(), now));
-    let seen = mule::couriers(&app.db(), now - MONTH)?;
+    let seen = mule::couriers(&app.db(), now - trips::MONTH)?;
     b.push_str(&couriers_table(&all, &seen, now));
     if app.send_key.is_none() {
         b.push_str("<p class=mute>Registering trips from this page is off because this site has no send key.</p>");
@@ -973,11 +959,7 @@ fn cargo_rows(p: &Plan, load: &[usize], status: &dyn Fn(usize) -> String, now: i
             n + 1,
             class_pill(c.class),
             esc(&c.to),
-            if c.bytes == 0 {
-                "text".into()
-            } else {
-                size_text(c.bytes)
-            },
+            cargo_size(c.bytes),
             human_duration(now - c.since_ms),
             status(*i)
         );
@@ -1140,18 +1122,7 @@ async fn manifest_page(State(app): State<Arc<App>>) -> Result<Html<String>, Fail
     }
     let me = app.whoami().await?.key;
     let m = car::manifest(&app, &me, now)?;
-    let mut aboard = vec![];
-    for i in &m.load {
-        let ok = match &m.plan.cargo[*i].root {
-            None => true,
-            Some(root) => app
-                .core
-                .blob_status(root)
-                .await?
-                .is_some_and(|s| s.complete),
-        };
-        aboard.push((*i, ok));
-    }
+    let aboard = car::aboard(&app, &m).await?;
     let choices: Vec<(String, String)> = trips::trips(&app.db())?
         .iter()
         .flat_map(|t| {
@@ -1167,7 +1138,7 @@ async fn manifest_page(State(app): State<Arc<App>>) -> Result<Html<String>, Fail
         })
         .collect();
     let capacity = app.cfg.car.as_ref().map_or(0, |c| c.capacity_mb) * 1_000_000;
-    let loaded = |i: usize| aboard.iter().any(|(j, ok)| *j == i && *ok);
+    let loaded = |i: usize| m.load.iter().zip(&aboard).any(|(j, ok)| *j == i && *ok);
     let active = app.active()?;
     let carried: Vec<View> = crate::mule::carrying(&active, &me)
         .into_iter()
@@ -1233,6 +1204,7 @@ mod tests {
             "/trips".into(),
             "/send?to=north&call=N0AAA".into(),
             "/api/corridors".into(),
+            "/api/mule".into(),
         ];
         for p in paths {
             let r = http.get(format!("{url}{p}")).send().await.unwrap();
